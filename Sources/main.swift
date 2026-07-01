@@ -250,6 +250,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     let amber = NSColor(srgbRed: 0.95, green: 0.73, blue: 0.18, alpha: 1) // "awaiting permission" yellow dot
     let frames: [NSImage] = StatusController.loadFrames()
     let spriteFPS: Double = 9 // tune: 8 frames per loop -> ~0.9s/cycle
+    let barIconSize: CGFloat = 16 // menu bar glyph size in points; matches Apple's own status icons (was 18)
 
     enum AnimStyle: String { case web, code, crab }
     var animStyle: AnimStyle = .web
@@ -1119,7 +1120,7 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     // nil color => adaptive template image (system draws it black/white per the menu bar).
     func codeIcon(color: NSColor?, glyph: Int, scale: CGFloat) -> NSImage {
-        let s: CGFloat = 18
+        let s = barIconSize
         guard glyph < codeGlyphMasks.count else { return NSImage(size: NSSize(width: s, height: s)) }
         let mask = codeGlyphMasks[glyph]
         let img = NSImage(size: NSSize(width: s, height: s), flipped: false) { _ in
@@ -1182,7 +1183,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         let rep = src.representations.first
         let pw = CGFloat(rep?.pixelsWide ?? Int(src.size.width))
         let ph = CGFloat(rep?.pixelsHigh ?? Int(src.size.height))
-        let h: CGFloat = 18, w = (ph > 0 ? h * (pw / ph) : h)
+        let h = barIconSize, w = (ph > 0 ? h * (pw / ph) : h)
         let img = NSImage(size: NSSize(width: w, height: h), flipped: false) { rect in
             src.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0)
             return true
@@ -1192,7 +1193,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     func dotIcon(color: NSColor?) -> NSImage {
-        let s: CGFloat = 18, d: CGFloat = 9
+        let s = barIconSize, d = barIconSize / 2
         let img = NSImage(size: NSSize(width: s, height: s), flipped: false) { _ in
             (color ?? .systemYellow).setFill()
             NSBezierPath(ovalIn: NSRect(x: (s - d) / 2, y: (s - d) / 2, width: d, height: d)).fill()
@@ -1204,7 +1205,7 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     // Paint `color` through a frame mask's alpha (destinationIn) so frames recolor.
     func tint(_ set: [NSImage], color: NSColor?, frame: Int) -> NSImage {
-        let s: CGFloat = 18
+        let s = barIconSize
         guard !set.isEmpty else { return NSImage(size: NSSize(width: s, height: s)) }
         let mask = set[frame % set.count]
         let img = NSImage(size: NSSize(width: s, height: s), flipped: false) { rect in
