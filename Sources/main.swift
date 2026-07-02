@@ -255,7 +255,9 @@ final class StatusController: NSObject, NSMenuDelegate {
     enum AnimStyle: String { case web, code, crab }
     var animStyle: AnimStyle = .web
     var showTimer = false
-    var iconSystem = false // false = brand Orange; true = adaptive black/white (template image)
+    enum IconColorMode: Int { case orange = 0, system = 1, dynamic = 2 }
+    // orange = always brand; system = always adaptive template; dynamic = adaptive when idle, orange when working
+    var iconColorMode: IconColorMode = .orange
     var playCompletionSound = false // chime when a turn longer than ~5 min finishes
     var useThinkingWords = true     // rotate a playful verb ("Manifesting…") in place of "Thinking…"
     var sessionWord: [String: String] = [:] // id -> current thinking word; re-picked on each entry into "thinking"
@@ -292,7 +294,15 @@ final class StatusController: NSObject, NSMenuDelegate {
         s.volume = 0.7 // the clip is loud at full system volume; play it a bit softer
         return s
     }()
-    var iconColor: NSColor? { iconSystem ? nil : brand } // nil => render as an adaptive template
+    // Color for the menu bar glyph; nil => adaptive template (black on light bars, white on dark).
+    // `resting` lets the Dynamic mode differ by state: adaptive when idle, brand orange when working.
+    func iconColor(resting: Bool) -> NSColor? {
+        switch iconColorMode {
+        case .orange:  return brand
+        case .system:  return nil
+        case .dynamic: return resting ? nil : brand
+        }
+    }
     let codeGlyphs = ["✻", "✽", "✶", "✳", "✢"]
     let codePeaks: [CGFloat] = [1.0, 1.0, 1.0, 1.0, 1.0]
     let codeDip: CGFloat = 0.14 // glyph shrinks to this at each swap
@@ -323,14 +333,18 @@ final class StatusController: NSObject, NSMenuDelegate {
         super.init()
         let d = UserDefaults.standard
         if d.object(forKey: "showTimer") != nil { showTimer = d.bool(forKey: "showTimer") }
-        if d.object(forKey: "iconSystem") != nil { iconSystem = d.bool(forKey: "iconSystem") }
+        if let raw = d.object(forKey: "iconColorMode") as? Int, let m = IconColorMode(rawValue: raw) {
+            iconColorMode = m
+        } else if d.object(forKey: "iconSystem") != nil { // migrate the old two-way setting
+            iconColorMode = d.bool(forKey: "iconSystem") ? .system : .orange
+        }
         if d.object(forKey: "completionSound") != nil { playCompletionSound = d.bool(forKey: "completionSound") }
         if d.object(forKey: "thinkingWords") != nil { useThinkingWords = d.bool(forKey: "thinkingWords") }
         if let s = d.string(forKey: "animStyle"), let st = AnimStyle(rawValue: s) { animStyle = st }
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
-        render(label: "", color: iconColor, animate: false, startedAt: 0)
+        render(label: "", color: iconColor(resting: true), animate: false, startedAt: 0)
         let t = Timer(timeInterval: 0.4, repeats: true) { [weak self] _ in self?.tick() }
         RunLoop.main.add(t, forMode: .common)
         pollTimer = t
@@ -553,11 +567,11 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
 
         settingsSub.addItem(header("Color Theme"))
-        for (sys, name) in [(false, "Orange"), (true, "System")] {
+        for (mode, name) in [(IconColorMode.orange, "Orange"), (.system, "System"), (.dynamic, "Dynamic")] {
             let it = NSMenuItem(title: name, action: #selector(chooseColor(_:)), keyEquivalent: "")
             it.target = self
-            it.representedObject = sys
-            it.state = iconSystem == sys ? .on : .off
+            it.representedObject = mode.rawValue
+            it.state = iconColorMode == mode ? .on : .off
             settingsSub.addItem(it)
         }
 
@@ -860,9 +874,9 @@ final class StatusController: NSObject, NSMenuDelegate {
 
 
     @objc func chooseColor(_ sender: NSMenuItem) {
-        guard let sys = sender.representedObject as? Bool else { return }
-        iconSystem = sys
-        UserDefaults.standard.set(iconSystem, forKey: "iconSystem")
+        guard let raw = sender.representedObject as? Int, let m = IconColorMode(rawValue: raw) else { return }
+        iconColorMode = m
+        UserDefaults.standard.set(raw, forKey: "iconColorMode")
         evaluate() // re-render the current state in the new color
     }
 
@@ -955,13 +969,13 @@ final class StatusController: NSObject, NSMenuDelegate {
         case "permission":
             render(label: statusText(lead, eff: lead.eff), color: amber, animate: false, startedAt: 0, dot: true)
         case "thinking", "tool":
-            render(label: statusText(lead, eff: lead.eff), color: iconColor, animate: true, startedAt: lead.startedAt)
+            render(label: statusText(lead, eff: lead.eff), color: iconColor(resting: false), animate: true, startedAt: lead.startedAt)
         default:
             renderResting()
         }
     }
 
-    func renderResting() { render(label: "", color: iconColor, animate: false, startedAt: 0) }
+    func renderResting() { render(label: "", color: iconColor(resting: true), animate: false, startedAt: 0) }
 
     // Per-session effective state with two recovery nets: an absolute age cap, plus the transcript
     // "interrupted by user" marker (Esc / denied permission fire no hook, freezing the file). "done"
