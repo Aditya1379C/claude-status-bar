@@ -168,6 +168,10 @@ final class SessionRowView: NSView {
             timerField.stringValue = timer
             timerField.frame = NSRect(x: pillLeft - timerGap - timerW, y: (rowH - 16) / 2, width: timerW, height: 16)
         } else { timerField.isHidden = true }
+        // Fill the name field out to whatever sits to its right (timer when working, else the pill),
+        // so resting rows (the common case) get the full row width for longer chat titles.
+        let nameRight = (timer != nil ? timerField.frame.minX : pillLeft) - 8
+        nameField.frame.size.width = max(40, nameRight - nameField.frame.minX)
     }
     // Custom views don't get the menu's automatic hover highlight, so draw it ourselves.
     override func updateTrackingAreas() {
@@ -243,6 +247,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     var turnStart: [String: Double] = [:]  // id -> active turn start (5-min sound gate)
     var menuIsOpen = false                  // refresh the dropdown's per-session timers only while open
     var sessionMenuItems: [(item: NSMenuItem, id: String)] = []
+    var chatTitleIndex: [String: String] = [:]  // cliSessionId -> desktop app chat title; rebuilt once per menu open
     var activeBase = ""        // label without the elapsed clock
     var startedAt: Double = 0  // unix seconds the current turn began (0 = no clock)
     var activeColor: NSColor? = nil
@@ -492,6 +497,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         checkForUpdate() // refreshes the update cache for next open (gated to once a day)
 
         sessionMenuItems.removeAll()
+        chatTitleIndex = buildChatTitleIndex()
         let now = Date().timeIntervalSince1970
         // Gate ONLY the desktop app: opening/clicking a conversation there seeds an idle session without
         // real activity (the click-through clutter), so a desktop session stays out of the dropdown until
@@ -728,7 +734,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     func configureSessionRow(_ v: SessionRowView, _ s: Session, eff: String) {
         let cfg = uiConfig()
         let now = Date().timeIntervalSince1970
-        let nameMax = Int(cfg["nameMax"] ?? 16)
+        let nameMax = Int(cfg["nameMax"] ?? 48)
         let working = (eff == "thinking" || eff == "tool") && s.startedAt > 0
         let resting = !(eff == "permission" || eff == "thinking" || eff == "tool")  // the dim caret
         let tag = surfaceTag(s.entrypoint)
@@ -750,9 +756,43 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
     }
 
-    // Just the repo/cwd; the surface (CLI/APP) renders as a trailing badge instead of inline.
+    // The chat's name: the title the desktop app gave the conversation (keyed by
+    // cliSessionId == our session id). Falls back to the repo/cwd basename for CLI sessions
+    // and not-yet-titled chats. Surface (CLI/APP) still renders as a trailing badge.
     func sessionName(_ s: Session) -> String {
-        s.project.isEmpty ? "session" : s.project
+        if let title = chatTitleIndex[s.id], !title.isEmpty { return title }
+        return s.project.isEmpty ? "session" : s.project
+    }
+
+    // Scans the desktop app's per-session store for chat titles, keyed by cliSessionId (== our
+    // Session.id). Rebuilt once per menu open — see menuNeedsUpdate(_:) — never on a timer/tick.
+    // Missing dir, unreadable/malformed files, or archived-without-a-fresher-twin entries are all
+    // tolerated; worst case a row just falls back to the cwd basename.
+    func buildChatTitleIndex() -> [String: String] {
+        let base = (NSHomeDirectory() as NSString).appendingPathComponent("Library/Application Support/Claude/claude-code-sessions")
+        guard let en = FileManager.default.enumerator(atPath: base) else { return [:] }
+        var index: [String: String] = [:]
+        var winner: [String: (archived: Bool, activity: Double)] = [:]  // id -> the stored entry's tiebreak state
+        for case let subpath as String in en {
+            let name = (subpath as NSString).lastPathComponent
+            guard name.hasPrefix("local_"), name.hasSuffix(".json") else { continue }
+            guard let data = FileManager.default.contents(atPath: (base as NSString).appendingPathComponent(subpath)),
+                  let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+            guard let id = o["cliSessionId"] as? String, !id.isEmpty else { continue }
+            let title = (o["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !title.isEmpty else { continue }
+            let archived = o["isArchived"] as? Bool ?? false
+            let activity = (o["lastActivityAt"] as? NSNumber)?.doubleValue ?? 0
+            // Best entry per id: non-archived beats archived; within the same archived state, the
+            // more recently active one wins.
+            if let prev = winner[id] {
+                let better = (!archived && prev.archived) || (archived == prev.archived && activity > prev.activity)
+                guard better else { continue }
+            }
+            winner[id] = (archived, activity)
+            index[id] = title
+        }
+        return index
     }
 
     // CLAUDE_CODE_ENTRYPOINT -> a short all-caps badge tag.
