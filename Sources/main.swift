@@ -664,7 +664,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         value.font = NSFont.monospacedDigitSystemFont(ofSize: smallFont.pointSize, weight: .regular)
         value.textColor = .secondaryLabelColor
         value.alignment = .right
-        value.frame = NSRect(x: width - 12 - 120, y: (height - 16) / 2, width: 120, height: 16)
+        value.frame = NSRect(x: width - 12 - 160, y: (height - 16) / 2, width: 160, height: 16)
         value.autoresizingMask = [.minXMargin]
         row.addSubview(value)
 
@@ -680,8 +680,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         guard !s.transcript.isEmpty, let tokens = contextTokens(ofFileAt: s.transcript) else { return [] }
         let pct = Int((Double(tokens) / Double(contextWindow) * 100).rounded())
         return [
-            infoRow(label: "Context size", value: "\(compactTokens(tokens)) / 1M"),
-            infoRow(label: "Context used", value: "\(pct)%"),
+            infoRow(label: "Context size", value: "\(compactTokens(tokens)) / 1M · \(pct)%"),
         ]
     }
 
