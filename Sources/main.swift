@@ -555,53 +555,67 @@ final class StatusController: NSObject, NSMenuDelegate {
             menu.addItem(.separator())
         }
 
-        menu.addItem(toggleRow(title: "Show timer", isOn: showTimer) { [weak self] on in
+        // One "Settings" fly-out holds everything set-once: the quick toggles first, then a nested
+        // submenu per picker (Animation Style / Color Theme / Hide Idle Sessions), so the main menu
+        // stays focused on the live sessions.
+        let settingsParent = NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
+        let settingsSub = NSMenu()
+
+        settingsSub.addItem(toggleRow(title: "Show timer", isOn: showTimer) { [weak self] on in
             self?.showTimer = on
             UserDefaults.standard.set(on, forKey: "showTimer")
             self?.applyTitle()
         })
-        menu.addItem(toggleRow(title: "Completion sound", qualifier: "5min+", isOn: playCompletionSound) { [weak self] on in
+        settingsSub.addItem(toggleRow(title: "Completion sound", qualifier: "5min+", isOn: playCompletionSound) { [weak self] on in
             self?.playCompletionSound = on
             UserDefaults.standard.set(on, forKey: "completionSound")
         })
-        menu.addItem(toggleRow(title: "Thinking words", isOn: useThinkingWords) { [weak self] on in
+        settingsSub.addItem(toggleRow(title: "Thinking words", isOn: useThinkingWords) { [weak self] on in
             self?.useThinkingWords = on
             UserDefaults.standard.set(on, forKey: "thinkingWords")
             self?.evaluate()   // re-render the bar label immediately with/without the rotating word
         })
 
-        // One "Settings" fly-out holding every set-once picker, grouped by section headers, so the
-        // main menu stays focused on the live sessions + quick toggles instead of three separate submenus.
-        let settingsParent = NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
-        let settingsSub = NSMenu()
+        settingsSub.addItem(.separator())
 
-        settingsSub.addItem(header("Animation Style"))
+        // Each picker becomes its own dropdown: a titled parent item with a radio submenu (the current
+        // choice carries the checkmark), rather than a flat list under section headers.
+        let animParent = NSMenuItem(title: "Animation Style", action: nil, keyEquivalent: "")
+        let animSub = NSMenu()
         for (style, name) in [(AnimStyle.web, "Claude Spark"), (AnimStyle.code, "Claude Code"), (AnimStyle.crab, "Crab Walking")] {
             let it = NSMenuItem(title: name, action: #selector(chooseStyle(_:)), keyEquivalent: "")
             it.target = self
             it.representedObject = style.rawValue
             it.state = animStyle == style ? .on : .off
-            settingsSub.addItem(it)
+            animSub.addItem(it)
         }
+        animParent.submenu = animSub
+        settingsSub.addItem(animParent)
 
-        settingsSub.addItem(header("Color Theme"))
+        let colorParent = NSMenuItem(title: "Color Theme", action: nil, keyEquivalent: "")
+        let colorSub = NSMenu()
         for (mode, name) in [(IconColorMode.orange, "Orange"), (.system, "System"), (.dynamic, "Dynamic")] {
             let it = NSMenuItem(title: name, action: #selector(chooseColor(_:)), keyEquivalent: "")
             it.target = self
             it.representedObject = mode.rawValue
             it.state = iconColorMode == mode ? .on : .off
-            settingsSub.addItem(it)
+            colorSub.addItem(it)
         }
+        colorParent.submenu = colorSub
+        settingsSub.addItem(colorParent)
 
-        settingsSub.addItem(header("Hide Idle Sessions"))
+        let hideParent = NSMenuItem(title: "Hide Idle Sessions", action: nil, keyEquivalent: "")
+        let hideSub = NSMenu()
         let curHide = stalePruneAge
         for (name, secs) in [("5 minutes", 300.0), ("15 minutes", 900.0), ("30 minutes", 1800.0), ("1 hour", 3600.0), ("Never", 0.0)] {
             let it = NSMenuItem(title: name, action: #selector(chooseHideIdle(_:)), keyEquivalent: "")
             it.target = self
             it.representedObject = secs
             it.state = curHide == secs ? .on : .off
-            settingsSub.addItem(it)
+            hideSub.addItem(it)
         }
+        hideParent.submenu = hideSub
+        settingsSub.addItem(hideParent)
 
         settingsParent.submenu = settingsSub
         menu.addItem(settingsParent)
