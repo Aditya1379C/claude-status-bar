@@ -236,6 +236,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             self.ts = (o["ts"] as? NSNumber)?.doubleValue ?? 0
         }
     }
+    let contextWindow = 1_000_000  // fixed context-window size used for the "Context used" percentage
     var sessions: [String: Session] = [:]  // id -> latest parsed per-session state
     var fileMTimes: [String: Date] = [:]   // "<id>.json" -> last-parsed mtime (re-parse only on change)
     var soundPrev: [String: String] = [:]  // id -> previous raw state (completion-sound edge)
@@ -514,6 +515,14 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
         if visible.isEmpty, let lead = ordered.first { visible = [lead] }   // floor: never empty while alive
 
+        // Same priority rule as tick()'s `lead`: highest-priority effective state, ties broken by
+        // recency. Only this session gets the context-usage rows, and only if it's actually shown.
+        let activeLead = sessions.values.max { a, b in
+            let pa = priority(of: a.eff.isEmpty ? effectiveState(a, now: now) : a.eff)
+            let pb = priority(of: b.eff.isEmpty ? effectiveState(b, now: now) : b.eff)
+            return pa == pb ? a.ts < b.ts : pa < pb
+        }
+
         if !visible.isEmpty {
             menu.addItem(header("Sessions"))
             for s in visible {
@@ -526,6 +535,9 @@ final class StatusController: NSObject, NSMenuDelegate {
                 it.view = view
                 menu.addItem(it)
                 sessionMenuItems.append((it, s.id))  // kept so tick() can live-update the timers
+                if s.id == activeLead?.id {
+                    for row in contextInfoRows(for: s) { menu.addItem(row) }
+                }
             }
             menu.addItem(.separator())
         } else if claudeDesktopRunning() {
@@ -605,6 +617,52 @@ final class StatusController: NSObject, NSMenuDelegate {
         let it = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         it.isEnabled = false
         return it
+    }
+
+    // Compact token count for display: "281k" above 1000, else the raw number.
+    func compactTokens(_ n: Int) -> String {
+        n >= 1000 ? "\(Int((Double(n) / 1000).rounded()))k" : "\(n)"
+    }
+
+    // A disabled, secondary-gray info row built as a custom NSView (mirrors toggleRow's approach) so
+    // the label aligns under the session name (x=38) and the value stays pinned to the right edge,
+    // matching the row width/insets used elsewhere (toggleRow, session rows).
+    func infoRow(label: String, value: String) -> NSMenuItem {
+        let width = CGFloat(uiConfig()["boxWidth"] ?? 300), height: CGFloat = 20
+        let row = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        row.autoresizingMask = [.width]
+
+        let smallFont = NSFont.menuFont(ofSize: NSFont.menuFont(ofSize: 0).pointSize - 1)
+        let label = NSTextField(labelWithString: label)
+        label.font = smallFont
+        label.textColor = .secondaryLabelColor
+        label.frame = NSRect(x: 38, y: (height - 16) / 2, width: 180, height: 16)
+        label.autoresizingMask = [.maxXMargin]
+        row.addSubview(label)
+
+        let value = NSTextField(labelWithString: value)
+        value.font = NSFont.monospacedDigitSystemFont(ofSize: smallFont.pointSize, weight: .regular)
+        value.textColor = .secondaryLabelColor
+        value.alignment = .right
+        value.frame = NSRect(x: width - 12 - 120, y: (height - 16) / 2, width: 120, height: 16)
+        value.autoresizingMask = [.minXMargin]
+        row.addSubview(value)
+
+        let it = NSMenuItem()
+        it.isEnabled = false
+        it.view = row
+        return it
+    }
+
+    // Context-usage rows for the ACTIVE session only: absolute size and percent of the fixed window.
+    // Returns [] whenever there's no transcript or no usage line was found (never a 0/placeholder).
+    func contextInfoRows(for s: Session) -> [NSMenuItem] {
+        guard !s.transcript.isEmpty, let tokens = contextTokens(ofFileAt: s.transcript) else { return [] }
+        let pct = Int((Double(tokens) / Double(contextWindow) * 100).rounded())
+        return [
+            infoRow(label: "Context size", value: "\(compactTokens(tokens)) / 1M"),
+            infoRow(label: "Context used", value: "\(pct)%"),
+        ]
     }
 
     func toggleRow(title: String, qualifier: String? = nil, isOn: Bool, onToggle: @escaping (Bool) -> Void) -> NSMenuItem {
@@ -1058,6 +1116,38 @@ final class StatusController: NSObject, NSMenuDelegate {
         return s.split(separator: "\n").last {
             $0.contains("\"type\":\"user\"") || $0.contains("\"type\":\"assistant\"")
         }.map(String.init)
+    }
+
+    // Current context size: the token usage on the last non-sidechain assistant message in the
+    // transcript. Reads only the trailing tail (cheap even for huge transcripts) and scans from the
+    // end so we find the most recent qualifying line first. A truncated/unparseable line is just
+    // skipped, never crashes.
+    func contextTokens(ofFileAt path: String) -> Int? {
+        guard let fh = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? fh.close() }
+        let size = (try? fh.seekToEnd()) ?? 0
+        let chunk: UInt64 = 512 * 1024
+        try? fh.seek(toOffset: size > chunk ? size - chunk : 0)
+        guard let data = try? fh.readToEnd() else { return nil }
+        // Lossy decode: seeking to a fixed offset can split a multibyte char at the tail's start;
+        // strict UTF-8 would return nil and drop the whole read. The mangled leading (partial) line
+        // just fails its JSON parse and is skipped.
+        let s = String(decoding: data, as: UTF8.self)
+        let lines = s.split(separator: "\n")
+        for line in lines.reversed() {
+            guard line.contains("input_tokens") else { continue }
+            guard let ldata = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: ldata) as? [String: Any] else { continue }
+            guard obj["type"] as? String == "assistant" else { continue }
+            if let sidechain = obj["isSidechain"] as? Bool, sidechain { continue }
+            guard let message = obj["message"] as? [String: Any],
+                  let usage = message["usage"] as? [String: Any] else { continue }
+            let input = (usage["input_tokens"] as? NSNumber)?.intValue ?? 0
+            let cacheRead = (usage["cache_read_input_tokens"] as? NSNumber)?.intValue ?? 0
+            let cacheCreation = (usage["cache_creation_input_tokens"] as? NSNumber)?.intValue ?? 0
+            return input + cacheRead + cacheCreation
+        }
+        return nil
     }
 
     // MARK: render
