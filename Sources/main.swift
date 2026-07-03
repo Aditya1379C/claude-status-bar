@@ -617,16 +617,20 @@ final class StatusController: NSObject, NSMenuDelegate {
         hideParent.submenu = hideSub
         settingsSub.addItem(hideParent)
 
+        // Version lives at the foot of the Settings fly-out (with the update prompt when one's due),
+        // so the main menu ends on Quit.
+        settingsSub.addItem(.separator())
+        settingsSub.addItem(NSMenuItem(title: "Version \(currentVersion)", action: nil, keyEquivalent: ""))
+        if let latest = UserDefaults.standard.string(forKey: "latestVersion"), versionIsNewer(latest, than: currentVersion) {
+            let up = NSMenuItem(title: "Update available", action: #selector(openLatestRelease), keyEquivalent: "")
+            up.target = self
+            settingsSub.addItem(up)
+        }
+
         settingsParent.submenu = settingsSub
         menu.addItem(settingsParent)
 
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Version \(currentVersion)", action: nil, keyEquivalent: ""))
-        if let latest = UserDefaults.standard.string(forKey: "latestVersion"), versionIsNewer(latest, than: currentVersion) {
-            let up = NSMenuItem(title: "Update available", action: #selector(openLatestRelease), keyEquivalent: "")
-            up.target = self
-            menu.addItem(up)
-        }
         let q = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
         q.target = self
         menu.addItem(q)
