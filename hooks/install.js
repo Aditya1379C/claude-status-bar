@@ -13,6 +13,7 @@ const sbDir = path.join(home, ".claude", "statusbar");
 const MARKER = sbDir; // every hook command we add points inside this dir
 const updateDest = path.join(sbDir, "update.js");
 const lifecycleDest = path.join(sbDir, "lifecycle.js");
+const usageDest = path.join(sbDir, "usage.js");
 const settingsPath = path.join(home, ".claude", "settings.json");
 const node = process.execPath;
 
@@ -29,6 +30,7 @@ fs.rmSync(path.join(sbDir, "state.json"), { force: true });
 fs.rmSync(path.join(sbDir, "sessions.d"), { recursive: true, force: true });
 fs.copyFileSync(path.join(__dirname, "update.js"), updateDest);
 fs.copyFileSync(path.join(__dirname, "lifecycle.js"), lifecycleDest);
+fs.copyFileSync(path.join(__dirname, "usage.js"), usageDest);
 
 const cmd = (evt) => `${node} ${updateDest} ${evt}`;
 const life = (evt) => `${node} ${lifecycleDest} ${evt}`;
@@ -69,7 +71,19 @@ addUnmatched("Stop", cmd("stop"));
 addUnmatched("SessionStart", life("start"));
 addUnmatched("SessionEnd", life("end"));
 
+// Status line: feed plan-usage (5h/7d rate limits) to the menu bar via usage.js. Only claim
+// the statusLine slot if it's unset or already ours, so a user's own custom statusLine is
+// never clobbered (in that case plan-usage capture is simply skipped).
+const existingSL = settings.statusLine;
+const slIsOurs = existingSL && typeof existingSL.command === "string" && existingSL.command.includes(MARKER);
+if (!existingSL || slIsOurs) {
+  settings.statusLine = { type: "command", command: `${node} ${usageDest}` };
+} else {
+  console.log("Kept your existing custom statusLine; plan-usage capture not installed.");
+  console.log("To enable it, point your statusLine at:", usageDest);
+}
+
 fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
 console.log("Installed status-bar hooks into", settingsPath);
-console.log("Scripts:", updateDest, "and", lifecycleDest);
+console.log("Scripts:", updateDest + ",", lifecycleDest + ", and", usageDest);
 console.log("Backup (first run only):", settingsPath + ".bak-statusbar");

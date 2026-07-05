@@ -251,9 +251,15 @@ final class StatusController: NSObject, NSMenuDelegate {
     var activeBase = ""        // label without the elapsed clock
     var startedAt: Double = 0  // unix seconds the current turn began (0 = no clock)
     var activeColor: NSColor? = nil
+    struct PlanWindow { var pct: Int?; var resetsAt: Int? }
+    struct PlanUsage { var fiveHour: PlanWindow; var sevenDay: PlanWindow; var ts: Int }
+    var planUsage: PlanUsage? = nil
+    var planUsageMTime: Date? = nil
 
     let brand = NSColor(srgbRed: 0.851, green: 0.467, blue: 0.341, alpha: 1) // #d97757, Anthropic's official "Orange" accent
     let amber = NSColor(srgbRed: 0.95, green: 0.73, blue: 0.18, alpha: 1) // "awaiting permission" yellow dot
+    let usageWarn = NSColor.systemOrange   // plan usage > 70% (5h or 7d)
+    let usageCrit = NSColor.systemRed      // plan usage > 85% (5h or 7d)
     let frames: [NSImage] = StatusController.loadFrames()
     let spriteFPS: Double = 9 // tune: 8 frames per loop -> ~0.9s/cycle
     let barIconSize: CGFloat = 16 // menu bar glyph size in points; matches Apple's own status icons (was 18)
@@ -262,6 +268,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     var animStyle: AnimStyle = .web
     var showTimer = false
     enum IconColorMode: Int { case orange = 0, system = 1, dynamic = 2 }
+    enum UsageSeverity { case none, warning, critical }
     // orange = always brand; system = always adaptive template; dynamic = adaptive when idle, orange when working
     var iconColorMode: IconColorMode = .orange
     var playCompletionSound = false // chime when a turn longer than ~5 min finishes
@@ -494,6 +501,7 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        readPlanUsage()
         checkForUpdate() // refreshes the update cache for next open (gated to once a day)
 
         sessionMenuItems.removeAll()
@@ -552,6 +560,13 @@ final class StatusController: NSObject, NSMenuDelegate {
             let open = NSMenuItem(title: "Open Claude", action: #selector(openClaude), keyEquivalent: "")
             open.target = self
             menu.addItem(open)
+            menu.addItem(.separator())
+        }
+
+        let planRows = planUsageRows(now: Int(Date().timeIntervalSince1970))
+        if !planRows.isEmpty {
+            menu.addItem(header("Plan usage"))
+            for row in planRows { menu.addItem(row) }
             menu.addItem(.separator())
         }
 
@@ -651,7 +666,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     // A disabled, secondary-gray info row built as a custom NSView (mirrors toggleRow's approach) so
     // the label aligns under the session name (x=38) and the value stays pinned to the right edge,
     // matching the row width/insets used elsewhere (toggleRow, session rows).
-    func infoRow(label: String, value: String) -> NSMenuItem {
+    func infoRow(label: String, value: String, valueColor: NSColor? = nil) -> NSMenuItem {
         let width = CGFloat(uiConfig()["boxWidth"] ?? 300), height: CGFloat = 20
         let row = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
         row.autoresizingMask = [.width]
@@ -666,7 +681,7 @@ final class StatusController: NSObject, NSMenuDelegate {
 
         let value = NSTextField(labelWithString: value)
         value.font = NSFont.monospacedDigitSystemFont(ofSize: smallFont.pointSize, weight: .regular)
-        value.textColor = .secondaryLabelColor
+        value.textColor = valueColor ?? .secondaryLabelColor
         value.alignment = .right
         value.frame = NSRect(x: width - 12 - 160, y: (height - 16) / 2, width: 160, height: 16)
         value.autoresizingMask = [.minXMargin]
@@ -685,6 +700,82 @@ final class StatusController: NSObject, NSMenuDelegate {
         let pct = Int((Double(tokens) / Double(contextWindow) * 100).rounded())
         return [
             infoRow(label: "Context size", value: "\(compactTokens(tokens)) / 1M · \(pct)%"),
+        ]
+    }
+
+    // Strict thresholds, evaluated on the SAME rounded percent the row displays:
+    // 70 -> none, 71..85 -> warning, 86+ -> critical.
+    func severity(pct: Int) -> UsageSeverity { pct > 85 ? .critical : (pct > 70 ? .warning : .none) }
+
+    func usageColor(_ sev: UsageSeverity) -> NSColor? {
+        switch sev { case .critical: return usageCrit; case .warning: return usageWarn; case .none: return nil }
+    }
+
+    // Plan-usage capture: reads ~/.claude/statusbar/usage.json (written by the usage.js statusLine
+    // script). Mtime-gated so we don't re-parse the file every poll. Never throws: missing file or
+    // parse failure just clears planUsage.
+    func readPlanUsage() {
+        let path = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/usage.json")
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let mtime = attrs[.modificationDate] as? Date else {
+            planUsage = nil; planUsageMTime = nil; return
+        }
+        if planUsageMTime == mtime { return }
+        guard let data = FileManager.default.contents(atPath: path),
+              let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            planUsage = nil; planUsageMTime = nil; return
+        }
+        func window(_ key: String) -> PlanWindow {
+            guard let w = o[key] as? [String: Any] else { return PlanWindow(pct: nil, resetsAt: nil) }
+            return PlanWindow(pct: (w["pct"] as? NSNumber)?.intValue, resetsAt: (w["resetsAt"] as? NSNumber)?.intValue)
+        }
+        let ts = (o["ts"] as? NSNumber)?.intValue ?? 0
+        planUsage = PlanUsage(fiveHour: window("fiveHour"), sevenDay: window("sevenDay"), ts: ts)
+        planUsageMTime = mtime
+    }
+
+    // Severity of one window, honoring rollover and staleness.
+    func windowSeverity(_ w: PlanWindow, now: Int, ts: Int) -> UsageSeverity {
+        guard let p = w.pct else { return .none }
+        if let r = w.resetsAt, now >= r { return .none }   // window rolled -> reset/unknown, no warning
+        if now - ts > 900 { return .none }                 // >15 min without a CLI report -> don't false-alarm
+        return severity(pct: p)
+    }
+    // Rank for max(): none=0, warning=1, critical=2.
+    func rank(_ s: UsageSeverity) -> Int { s == .critical ? 2 : (s == .warning ? 1 : 0) }
+    // The dot reflects whichever window (5-hour OR 7-day) is closest to its cap.
+    func planWarnSeverity(now: Int) -> UsageSeverity {
+        guard let u = planUsage else { return .none }
+        let a = windowSeverity(u.fiveHour, now: now, ts: u.ts)
+        let b = windowSeverity(u.sevenDay, now: now, ts: u.ts)
+        return rank(a) >= rank(b) ? a : b
+    }
+
+    // Reset countdown formatter, e.g. "2h 14m", "1d", "45m".
+    func compactETA(_ secs: Int) -> String {
+        let s = max(0, secs); let d = s/86400, h = (s%86400)/3600, m = (s%3600)/60
+        if d > 0 { return h > 0 ? "\(d)d \(h)h" : "\(d)d" }
+        if h > 0 { return m > 0 ? "\(h)h \(m)m" : "\(h)h" }
+        return "\(m)m"
+    }
+
+    // Global plan-usage rows (account-wide, shown once, not per-session): "Session (5h)" / "Weekly (7d)".
+    func planUsageRows(now: Int) -> [NSMenuItem] {
+        guard let u = planUsage else { return [] }
+        func valueAndColor(_ w: PlanWindow) -> (String, NSColor?) {
+            guard let p = w.pct else { return ("—", nil) }
+            let stale = now - u.ts > 900
+            if let r = w.resetsAt, now >= r { return ("0% · just reset", nil) }
+            var value = "\(p)% · resets \(compactETA((w.resetsAt ?? now) - now))"
+            if stale { value += " (stale)" }
+            let color = stale ? nil : usageColor(severity(pct: p))
+            return (value, color)
+        }
+        let (fiveVal, fiveColor) = valueAndColor(u.fiveHour)
+        let (sevenVal, sevenColor) = valueAndColor(u.sevenDay)
+        return [
+            infoRow(label: "Session (5h)", value: fiveVal, valueColor: fiveColor),
+            infoRow(label: "Weekly (7d)", value: sevenVal, valueColor: sevenColor),
         ]
     }
 
@@ -1013,6 +1104,7 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     func tick() {
         checkLifecycle()
+        readPlanUsage()
         reloadSessions()
         evaluate()
         if menuIsOpen { refreshOpenMenuRows() }
@@ -1080,13 +1172,18 @@ final class StatusController: NSObject, NSMenuDelegate {
         statusItem.button?.toolTip = lead.map(sessionMenuLine)  // names repo + surface + state on hover
 
         guard let lead = lead else { renderResting(); return }
-        switch lead.eff {
-        case "permission":
-            render(label: statusText(lead, eff: lead.eff), color: amber, animate: false, startedAt: 0, dot: true)
-        case "thinking", "tool":
-            render(label: statusText(lead, eff: lead.eff), color: iconColor(resting: false), animate: true, startedAt: lead.startedAt)
-        default:
-            renderResting()
+        let sev = planWarnSeverity(now: Int(now))
+        if sev != .none {
+            render(label: "Approaching limit", color: usageColor(sev), animate: false, startedAt: 0, dot: true)
+        } else {
+            switch lead.eff {
+            case "permission":
+                render(label: statusText(lead, eff: lead.eff), color: amber, animate: false, startedAt: 0, dot: true)
+            case "thinking", "tool":
+                render(label: statusText(lead, eff: lead.eff), color: iconColor(resting: false), animate: true, startedAt: lead.startedAt)
+            default:
+                renderResting()
+            }
         }
     }
 
