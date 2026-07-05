@@ -26,11 +26,5 @@ for (const evt of Object.keys(settings.hooks || {})) {
     .filter((e) => (e.hooks || []).length > 0);
   if (settings.hooks[evt].length === 0) delete settings.hooks[evt];
 }
-// Remove our statusLine (only if it points at our usage.js) and delete the script.
-if (settings.statusLine && typeof settings.statusLine.command === "string" && settings.statusLine.command.includes(MARKER)) {
-  delete settings.statusLine;
-}
-try { fs.rmSync(path.join(MARKER, "usage.js"), { force: true }); } catch {}
-
 fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
 console.log("Removed status-bar hooks from", settingsPath);
