@@ -1,24 +1,13 @@
-<img width="672" height="80" alt="Screen Recording 2026-06-23 at 3 57 47 AM 2" src="https://github.com/user-attachments/assets/97876ac9-cd4f-431b-873a-93220de5bd99" />
-<br><br>
-
-<a href="https://github.com/m1ckc3s/claude-status-bar/releases/latest/download/ClaudeStatusBar.dmg"><img src="assets/download.png" alt="Download ClaudeStatusBar.dmg for macOS" width="260"></a>
+<a href="https://github.com/m1ckc3s/claude-status-bar/releases/latest/download/ClaudeStatusBar.dmg"><img src="assets/download.png" alt="Download ClaudeStatusBar.dmg for macOS" width="220"></a>
 <br>
-
+**Signed and notarized by Apple**
 ## Claude Status Bar
 
 A tiny macOS menu bar app that shows **Claude Code's live status**: an animated Claude icon while it's thinking or running a tool, a yellow dot when it's awaiting your permission, and the elapsed time of the current turn. Lightweight, no window, no dock icon, no usage dashboards.
 
 > Built so you can tab away during a long "thinking" stretch and still see, at a glance, whether Claude is working, waiting on you, or done.
 
-<img width="600" height="488" alt="Screen Recording 2026-06-26 at 10 01 17 PM (1)" src="https://github.com/user-attachments/assets/4cc7a726-abe5-4e9c-aa5f-8525ddf6f398" />
-
-> [!IMPORTANT]
-> **Multi-session support.** When several Claude Code sessions run at once (multiple terminals, or
-> a terminal plus the desktop app), the menu bar surfaces the highest-priority one: a session
-> awaiting your permission is never hidden behind one that's thinking. The dropdown lists 
-> every live session. Click a session to jump to it: desktop sessions focus
-> the Claude app, terminal sessions bring their terminal app to the front.
-> Precise per-tab focus is in progress: **[issue #19 →](https://github.com/m1ckc3s/claude-status-bar/issues/19)**.
+<img width="600" height="479" alt="Screen Recording 2026-07-10 at 12 32 23 AM" src="https://github.com/user-attachments/assets/f5d77b7c-f41d-4276-b28f-e1cf655fd323" />
 
 ---
 
@@ -32,7 +21,6 @@ A tiny macOS menu bar app that shows **Claude Code's live status**: an animated 
 Everything is controlled from the menu:
 
 - **Show timer:** toggle the elapsed `1m 1s` clock.
-- **Play completion sound:** a soft chime when a turn longer than five minutes finishes (off by default).
 - **Thinking words:** rotate a playful verb (`Manifesting…`, `Percolating…`) in place of `Thinking…`, like Claude Code (on by default).
 - **Animation style:**
   - **Claude Spark**, the web/chat "morph" spark
@@ -41,6 +29,8 @@ Everything is controlled from the menu:
 - **Icon color:** **Orange** or **System** (adaptive black/white). All three styles follow this setting: in System mode Crab Walking renders as a shaded monochrome silhouette that matches the menu bar.
 - **Version and update:** the menu shows your current version, with a one-click "Update available" when a newer release exists.
 
+**Multi-session support.** When several Claude Code sessions run at once (multiple terminals, or a terminal plus the desktop app), the menu bar surfaces the highest-priority one: a session awaiting your permission is never hidden behind one that's thinking. The dropdown lists every live session. Precise per-tab focus is in progress: **[issue #19 →](https://github.com/m1ckc3s/claude-status-bar/issues/19)**.
+
 ## Where it works
 
 | Surface | Tracked? |
@@ -48,14 +38,7 @@ Everything is controlled from the menu:
 | Claude Code CLI (terminal) | ✅ |
 | Claude Code Desktop — **Code** tab | ✅ |
 | Cursor (Claude Code extension) | ✅ |
-| Claude Desktop — **Chat** tab | ❌ |
-| **Cowork** | ❌ |
-
-## Requirements
-
-- macOS 12+
-- [Claude Code](https://claude.com/claude-code) (CLI or the Desktop app)
-- Node.js
+| Claude Desktop — **Chat/Cowork** tab | ❌ |
 
 ## Install
 
@@ -70,10 +53,17 @@ Signed and notarized.
 
 ### Updating
 
-Download the latest DMG and drag it into Applications (choose **Replace**). That's it: it refreshes its own hooks the next time it starts up (on a version change it re-runs its installer automatically), so there's nothing to run by hand. Your next Claude Code session picks them up.
-
 > [!IMPORTANT]
 > **Updated mid-session?** Sessions already open won't show up until they do something (send a prompt) or you start a new `claude` session.
+
+Download the latest DMG and drag it into Applications (choose **Replace**). That's it: it refreshes its own hooks the next time it starts up (on a version change it re-runs its installer automatically), so there's nothing to run by hand. Your next Claude Code session picks them up.
+
+## Requirements
+
+- macOS 12+
+- [Claude Code](https://claude.com/claude-code) (CLI or the Desktop app)
+- Node.js
+
 
 ### Option B — Claude Code plugin
 

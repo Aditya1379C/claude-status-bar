@@ -43,6 +43,9 @@ process.stdin.on("end", () => {
   try { prev = JSON.parse(fs.readFileSync(statePath, "utf8")); } catch {}
 
   const project = p.cwd ? path.basename(p.cwd) : prev.project || "";
+  // The app reads <cwd>/.git/HEAD for the branch and disambiguates same-named projects by
+  // parent folder; carried over from prev for events whose payload omits cwd.
+  const cwd = p.cwd || prev.cwd || "";
   const ts = Math.floor(Date.now() / 1000);
   let state = "idle", label = "", startedAt = prev.startedAt || 0;
 
@@ -89,7 +92,7 @@ process.stdin.on("end", () => {
   // stable for the session's life, on both CLI and desktop). The app uses kill(pid,0) for liveness.
   // started:true — any update.js event (prompt/tool/permission/stop) is real activity, so the session
   // graduates from "merely opened" to visible in the dropdown. Clicking a conversation never fires here.
-  const out = { state, label, tool: p.tool_name || "", project, sessionId: p.session_id || "", transcript: p.transcript_path || prev.transcript || "", entrypoint, term_program: termProgram, pid: process.ppid, started: true, startedAt, ts };
+  const out = { state, label, tool: p.tool_name || "", project, cwd, sessionId: p.session_id || "", transcript: p.transcript_path || prev.transcript || "", entrypoint, term_program: termProgram, pid: process.ppid, started: true, startedAt, ts };
   try {
     fs.mkdirSync(stateDir, { recursive: true });
     const tmp = statePath + "." + process.pid + ".tmp";

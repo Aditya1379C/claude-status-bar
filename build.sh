@@ -28,8 +28,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>Claude Status Bar</string>
   <key>CFBundleIdentifier</key><string>com.local.claudestatusbar</string>
   <key>CFBundleExecutable</key><string>ClaudeStatusBar</string>
-  <key>CFBundleVersion</key><string>0.3.2</string>
-  <key>CFBundleShortVersionString</key><string>0.3.2</string>
+  <key>CFBundleVersion</key><string>0.3.4</string>
+  <key>CFBundleShortVersionString</key><string>0.3.4</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>LSUIElement</key><true/>
@@ -42,7 +42,7 @@ PLIST
 mkdir -p "$APP/Contents/Resources"
 cp hooks/update.js hooks/lifecycle.js hooks/install.js hooks/uninstall.js "$APP/Contents/Resources/"
 cp assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
-cp assets/completion.mp3 "$APP/Contents/Resources/completion.mp3"
+cp assets/completion.mp3 "$APP/Contents/Resources/completion.mp3" # fork keeps the 5min+ completion chime upstream dropped
 
 # --- Signing / notarization ---
 # For a clean (no Gatekeeper warning) release you need, set up once on this Mac:
@@ -55,8 +55,11 @@ cp assets/completion.mp3 "$APP/Contents/Resources/completion.mp3"
 TEAM_ID="W9JZ4932LA"
 NOTARY_PROFILE="${NOTARY_PROFILE:-claude-statusbar}"
 
+# `|| true` so a missing Developer ID cert (grep matches nothing → nonzero, which `set -eo pipefail`
+# would otherwise treat as a fatal error) falls through to the ad-hoc dev build below instead of
+# aborting the whole script.
 SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
-  | grep "Developer ID Application" | grep "$TEAM_ID" | head -1 | sed -E 's/.*"(.*)"/\1/')"
+  | grep "Developer ID Application" | grep "$TEAM_ID" | head -1 | sed -E 's/.*"(.*)"/\1/')" || true
 
 # Strip extended attributes (Finder info, quarantine, etc.) that bundled resources can
 # carry — codesign rejects them ("resource fork, Finder information, ... not allowed").

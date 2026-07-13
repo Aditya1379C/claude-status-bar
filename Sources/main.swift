@@ -103,14 +103,16 @@ final class SessionRowView: NSView {
     let id: String
     var onClick: (() -> Void)?
     private let iconView = NSImageView()
+    private let spinner = NSProgressIndicator()
     private let nameField = NSTextField(labelWithString: "")
     private let timerField = NSTextField(labelWithString: "")
     private let pillView = NSImageView()
-    private let pad: CGFloat = 14, iconSize: CGFloat = 16, rowH: CGFloat = 24, timerW: CGFloat = 74
+    private let pad: CGFloat = 14, iconSize: CGFloat = 16, rowH: CGFloat = 24
     private let highlightView = NSVisualEffectView()  // system selection material = exact native highlight
     private var hovered = false
     private var iconBaseTint: NSColor?       // tint when not hovered (template icons); white on hover
     private var pillNormal: NSImage?, pillSelected: NSImage?
+    private var nameText = "", branchText = ""
 
     init(id: String, width: CGFloat) {
         self.id = id
@@ -127,6 +129,14 @@ final class SessionRowView: NSView {
         iconView.imageScaling = .scaleProportionallyUpOrDown
         iconView.autoresizingMask = [.maxXMargin]
         addSubview(iconView)
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.isIndeterminate = true
+        spinner.isDisplayedWhenStopped = false
+        spinner.frame = iconView.frame
+        spinner.autoresizingMask = [.maxXMargin]
+        spinner.isHidden = true
+        addSubview(spinner)
         nameField.font = .menuFont(ofSize: 0)
         nameField.textColor = .labelColor
         nameField.lineBreakMode = .byTruncatingTail
@@ -144,15 +154,23 @@ final class SessionRowView: NSView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func setIcon(_ img: NSImage?) { iconView.image = img }
-
-    func configure(icon: NSImage?, iconTint: NSColor?, name: String, timer: String?,
+    func configure(icon: NSImage?, iconTint: NSColor?, spinning: Bool, name: String, branch: String, timer: String?,
                    pillNormal: NSImage?, pillSelected: NSImage?, pillInset: CGFloat, timerGap: CGFloat) {
         let w = bounds.width
         iconView.image = icon
         iconBaseTint = iconTint
         iconView.contentTintColor = hovered ? .white : iconTint
-        nameField.stringValue = name
+        if spinning {
+            iconView.isHidden = true
+            spinner.isHidden = false
+            spinner.startAnimation(nil)
+        } else {
+            spinner.stopAnimation(nil)
+            spinner.isHidden = true
+            iconView.isHidden = false
+        }
+        nameText = name; branchText = branch
+        renderName()
         self.pillNormal = pillNormal; self.pillSelected = pillSelected
         let pill = hovered ? pillSelected : pillNormal
         var pillLeft = w - pillInset
@@ -166,12 +184,44 @@ final class SessionRowView: NSView {
         if let timer = timer {
             timerField.isHidden = false
             timerField.stringValue = timer
-            timerField.frame = NSRect(x: pillLeft - timerGap - timerW, y: (rowH - 16) / 2, width: timerW, height: 16)
+            // Fit the column to the text (mono font, right edge anchored at the pill): a fixed-width
+            // column reserved ~50pt of blank space that pixel-truncated the name · branch next to it.
+            let font = timerField.font ?? NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+            let tw = ceil(timer.size(withAttributes: [.font: font]).width) + 2
+            // The timer font is 2pt smaller than the name font; equal-height boxes at the same y center
+            // the text, which leaves the smaller font's baseline higher and the digits visibly floating
+            // next to the name. Offset the frame so the two baselines coincide.
+            let nf = nameField.font ?? NSFont.menuFont(ofSize: 0)
+            let baseline = { (f: NSFont) in (16 - (f.ascender - f.descender)) / 2 - f.descender }
+            let dy = baseline(nf) - baseline(font)
+            timerField.frame = NSRect(x: pillLeft - timerGap - tw, y: (rowH - 16) / 2 + dy, width: tw, height: 16)
         } else { timerField.isHidden = true }
-        // Fill the name field out to whatever sits to its right (timer when working, else the pill),
-        // so resting rows (the common case) get the full row width for longer chat titles.
-        let nameRight = (timer != nil ? timerField.frame.minX : pillLeft) - 8
-        nameField.frame.size.width = max(40, nameRight - nameField.frame.minX)
+        // Name stretches to whatever the timer/pill leave free (branch text made the fixed 160 tight);
+        // pixel truncation via the paragraph style handles overflow.
+        let nameRight = timer != nil ? timerField.frame.minX : pillLeft
+        nameField.frame.size.width = max(40, nameRight - timerGap - nameField.frame.minX)
+    }
+    // name in the label color, " · branch" dimmed — mirrored on hover, where setting textColor
+    // can't restyle an attributed string.
+    private func renderName() {
+        let para = NSMutableParagraphStyle()
+        para.lineBreakMode = .byTruncatingTail
+        // Barely-overflowing text otherwise gets its tracking silently condensed to fit ("default
+        // tightening"), so the same name renders visibly squished on a row whose timer narrows the
+        // field. Constant tracking on every row; overflow shows an honest ellipsis instead.
+        para.allowsDefaultTighteningForTruncation = false
+        let font = NSFont.menuFont(ofSize: 0)
+        let text = NSMutableAttributedString(string: nameText, attributes: [
+            .font: font, .paragraphStyle: para,
+            .foregroundColor: hovered ? NSColor.white : .labelColor,
+        ])
+        if !branchText.isEmpty {
+            text.append(NSAttributedString(string: " · " + branchText, attributes: [
+                .font: font, .paragraphStyle: para,
+                .foregroundColor: hovered ? NSColor.white.withAlphaComponent(0.75) : .secondaryLabelColor,
+            ]))
+        }
+        nameField.attributedStringValue = text
     }
     // Custom views don't get the menu's automatic hover highlight, so draw it ourselves.
     override func updateTrackingAreas() {
@@ -184,7 +234,7 @@ final class SessionRowView: NSView {
     private func setHover(_ h: Bool) {
         hovered = h
         highlightView.isHidden = !h
-        nameField.textColor = h ? .white : .labelColor
+        renderName()
         timerField.textColor = h ? .white : .secondaryLabelColor
         iconView.contentTintColor = h ? .white : iconBaseTint
         if !pillView.isHidden { pillView.image = h ? pillSelected : pillNormal }
@@ -203,8 +253,6 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     var pollTimer: Timer?
     var animTimer: Timer?
-    var spinTimer: Timer?      // rotates the working-state spinner while the menu is open
-    var spinAngle: CGFloat = 0
     var frameIdx = 0
 
     let launchedAt = Date()
@@ -214,10 +262,11 @@ final class StatusController: NSObject, NSMenuDelegate {
     // "Hide idle after" setting (seconds): hide a resting session's ROW once it's been quiet this long.
     // Render-only — it never deletes the file or affects liveness (that's pid-driven now), and the
     // most-recent session is always kept visible (floor at one). 0 = Never. Defaults to 30 min.
-    var stalePruneAge: TimeInterval { UserDefaults.standard.object(forKey: "hideIdleAfter") as? Double ?? 1800 }
+    var stalePruneAge: TimeInterval { UserDefaults.standard.object(forKey: "hideIdleAfter") as? Double ?? 900 }
 
     struct Session {
         var id: String, state: String, label: String, project: String, transcript: String
+        var cwd: String         // session working directory; "" on pre-upgrade files
         var entrypoint: String  // CLAUDE_CODE_ENTRYPOINT: "cli", "claude-desktop", …
         var termProgram: String // TERM_PROGRAM for CLI sessions: "Apple_Terminal", "iTerm.app", …
         var pid: Int32          // the session's `claude` process; kill(pid,0) drives liveness. 0 = pre-upgrade file.
@@ -225,6 +274,8 @@ final class StatusController: NSObject, NSMenuDelegate {
                                 // conversation seeds started=false and stays out of the dropdown.
         var startedAt: Double, ts: Double
         var eff: String = ""   // effective state, recomputed once per tick in evaluate()
+        var branch: String = ""      // git branch (or short SHA when detached); "" outside a repo
+        var displayName: String = "" // project, parent-qualified when two live sessions share a name
 
         init(json o: [String: Any], id: String) {
             self.id = id
@@ -232,6 +283,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             self.label = o["label"] as? String ?? ""
             self.project = o["project"] as? String ?? ""
             self.transcript = o["transcript"] as? String ?? ""
+            self.cwd = o["cwd"] as? String ?? ""
             self.entrypoint = o["entrypoint"] as? String ?? ""
             self.termProgram = o["term_program"] as? String ?? ""
             self.pid = Int32(truncatingIfNeeded: (o["pid"] as? NSNumber)?.intValue ?? 0)
@@ -243,6 +295,8 @@ final class StatusController: NSObject, NSMenuDelegate {
     let contextWindow = 1_000_000  // fixed context-window size used for the "Context used" percentage
     var sessions: [String: Session] = [:]  // id -> latest parsed per-session state
     var fileMTimes: [String: Date] = [:]   // "<id>.json" -> last-parsed mtime (re-parse only on change)
+    var gitHeadCache: [String: String] = [:]  // cwd -> resolved HEAD path ("" = confirmed non-git)
+    var prevState: [String: String] = [:]  // id -> previous raw state per session
     var soundPrev: [String: String] = [:]  // id -> previous raw state (completion-sound edge)
     var turnStart: [String: Double] = [:]  // id -> active turn start (5-min sound gate)
     var menuIsOpen = false                  // refresh the dropdown's per-session timers only while open
@@ -460,26 +514,10 @@ final class StatusController: NSObject, NSMenuDelegate {
     // to live-update the per-session elapsed clocks. menuNeedsUpdate rebuilds the rows on each open.
     func menuWillOpen(_ menu: NSMenu) {
         menuIsOpen = true
-        spinTimer?.invalidate()
-        let t = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in self?.spinTick() }
-        RunLoop.main.add(t, forMode: .common)  // .common so it fires during menu tracking
-        spinTimer = t
     }
     func menuDidClose(_ menu: NSMenu) {
         menuIsOpen = false
         sessionMenuItems.removeAll()
-        spinTimer?.invalidate(); spinTimer = nil
-    }
-
-    func spinTick() {
-        spinAngle += 5   // 30fps * 5° = 150°/s ≈ 0.42 rev/s, a calm spin
-        guard let img = rotatedSpinner(spinAngle) else { return }
-        let now = Date().timeIntervalSince1970
-        for (item, id) in sessionMenuItems {
-            guard let s = sessions[id], let v = item.view as? SessionRowView else { continue }
-            let eff = s.eff.isEmpty ? effectiveState(s, now: now) : s.eff
-            if eff == "thinking" || eff == "tool" { v.setIcon(img) }
-        }
     }
 
     // The session SET only changes on reopen (NSMenu can't add/remove rows reliably mid-track).
@@ -495,6 +533,13 @@ final class StatusController: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         checkForUpdate() // refreshes the update cache for next open (gated to once a day)
+
+        // Branches otherwise refresh only on hook events, so re-read on open (one tiny file read per
+        // session) to catch a checkout made while a session sat idle.
+        for (id, s) in sessions where !s.cwd.isEmpty {
+            if gitHeadCache[s.cwd] == "" { gitHeadCache[s.cwd] = nil }  // recheck non-git: may have been git-init'd since
+            var u = s; u.branch = branchForCwd(u.cwd); sessions[id] = u
+        }
 
         sessionMenuItems.removeAll()
         chatTitleIndex = buildChatTitleIndex()
@@ -733,6 +778,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         // The icon carries the state (spinner / amber dot / caret); the row text is just the project,
         // plus a live timer while working since the spinner can't convey elapsed.
         var line = truncated(sessionName(s))
+        if !s.branch.isEmpty { line += " · " + truncated(s.branch, max: 22, keep: 20) }
         if eff == "thinking" || eff == "tool", s.startedAt > 0 {
             line += "  " + elapsed(max(0, Int(now - s.startedAt)))
         }
@@ -751,18 +797,28 @@ final class StatusController: NSObject, NSMenuDelegate {
     func configureSessionRow(_ v: SessionRowView, _ s: Session, eff: String) {
         let cfg = uiConfig()
         let now = Date().timeIntervalSince1970
+        // Generous cap: the row's pixel truncation does the real limiting now that the name field
+        // sizes to the free space; this only guards against pathological strings. Higher than upstream's
+        // default so longer desktop chat titles get more room before the hard cut.
         let nameMax = Int(cfg["nameMax"] ?? 48)
         let working = (eff == "thinking" || eff == "tool") && s.startedAt > 0
         let resting = !(eff == "permission" || eff == "thinking" || eff == "tool")  // the dim caret
         let tag = surfaceTag(s.entrypoint)
         v.configure(icon: sessionSymbol(s, eff: eff),
                     iconTint: resting ? .tertiaryLabelColor : .labelColor,  // caret dim; spinner matches the name font; amber image ignores tint
+                    spinning: (eff == "thinking" || eff == "tool"),
                     name: truncated(sessionName(s), max: nameMax, keep: nameMax),
+                    branch: truncated(s.branch, max: 22, keep: 20),
                     timer: working ? elapsed(max(0, Int(now - s.startedAt))) : nil,
                     pillNormal: tag.isEmpty ? nil : pillImage(tag),
                     pillSelected: tag.isEmpty ? nil : pillImage(tag, selected: true),
                     pillInset: CGFloat(cfg["pillInset"] ?? 12),
                     timerGap: CGFloat(cfg["timerGap"] ?? 10))
+        // Truncated rows stay inspectable: full name, branch, and path on hover.
+        var tip = sessionName(s)
+        if !s.branch.isEmpty { tip += " · " + s.branch }
+        if !s.cwd.isEmpty { tip += "\n" + s.cwd }
+        v.toolTip = tip
     }
 
     func statusText(_ s: Session, eff: String) -> String {
@@ -774,10 +830,12 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     // The chat's name: the title the desktop app gave the conversation (keyed by
-    // cliSessionId == our session id). Falls back to the repo/cwd basename for CLI sessions
-    // and not-yet-titled chats. Surface (CLI/APP) still renders as a trailing badge.
+    // cliSessionId == our session id). Falls back to the disambiguated repo/cwd (parent-qualified
+    // on a name collision) for CLI sessions and not-yet-titled chats. Surface (CLI/APP) still
+    // renders as a trailing badge.
     func sessionName(_ s: Session) -> String {
         if let title = chatTitleIndex[s.id], !title.isEmpty { return title }
+        if !s.displayName.isEmpty { return s.displayName }
         return s.project.isEmpty ? "session" : s.project
     }
 
@@ -852,7 +910,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     func sessionSymbol(_ s: Session, eff: String) -> NSImage? {
         switch eff {
         case "permission":       return symbolImage("exclamationmark.circle.fill", tint: amber)
-        case "thinking", "tool": return rotatedSpinner(spinAngle)
+        case "thinking", "tool": return nil
         default:                 return restingCaret   // done/idle merged: dim "ready for input" caret
         }
     }
@@ -862,7 +920,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     lazy var restingCaret: NSImage? = {
         let glyph = "\u{276F}" as NSString
         let font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        let side = spinnerBase?.size.width ?? 15
+        let side: CGFloat = 15
         let img = NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
             let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
             let g = glyph.size(withAttributes: attrs)
@@ -872,38 +930,6 @@ final class StatusController: NSObject, NSMenuDelegate {
         img.isTemplate = true   // tint via contentTintColor: dim (tertiary) normally, white on hover
         return img
     }()
-
-    // Pre-rendered into a padded SQUARE canvas with the glyph centered, so rotation pivots on the
-    // visual center (an off-center pivot makes the spinner orbit/wobble instead of spinning in place).
-    lazy var spinnerBase: NSImage? = {
-        let name: String
-        if #available(macOS 15.0, *) { name = "progress.indicator" } else { name = "rays" }
-        let cfg = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
-        guard let sym = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(cfg) else { return nil }
-        let side = ceil(max(sym.size.width, sym.size.height)) + 2
-        let img = NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
-            sym.draw(in: NSRect(x: (side - sym.size.width) / 2, y: (side - sym.size.height) / 2,
-                                width: sym.size.width, height: sym.size.height))
-            return true
-        }
-        img.isTemplate = true
-        return img
-    }()
-
-    func rotatedSpinner(_ angleDeg: CGFloat) -> NSImage? {
-        guard let base = spinnerBase else { return nil }
-        let size = base.size
-        let img = NSImage(size: size, flipped: false) { rect in
-            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
-            ctx.translateBy(x: size.width / 2, y: size.height / 2)
-            ctx.rotate(by: -angleDeg * .pi / 180)
-            ctx.translateBy(x: -size.width / 2, y: -size.height / 2)
-            base.draw(in: rect)
-            return true
-        }
-        img.isTemplate = true
-        return img
-    }
 
     func symbolImage(_ name: String, tint: NSColor? = nil) -> NSImage? {
         guard let img = NSImage(systemSymbolName: name, accessibilityDescription: nil) else { return nil }
@@ -939,8 +965,20 @@ final class StatusController: NSObject, NSMenuDelegate {
     // Re-pick a word each time a session ENTERS the thinking state (prompt, or a tool->thinking `post`),
     // avoiding an immediate repeat, so a tool round-trip lands a different word. Held steady while the
     // session stays thinking. Computed regardless of the toggle so flipping it on shows instantly.
-    func updateThinkingWord(_ s: Session) {
+    // True on the rising edge into "done" for a turn that ran >= 5 min, so the chime only
+    // fires once per long turn. Keeps its own prev-state map so it's independent of prevState.
+    func soundEdgeDone(_ s: Session, now: Double) -> Bool {
         let prev = soundPrev[s.id] ?? ""
+        if s.state == "thinking" || s.state == "tool", s.startedAt > 0 { turnStart[s.id] = s.startedAt }
+        var edge = false
+        if s.state == "done", prev != "done", let st = turnStart[s.id], st > 0, now - st >= 300 { edge = true }
+        if s.state == "done" { turnStart[s.id] = 0 }
+        soundPrev[s.id] = s.state
+        return edge
+    }
+
+    func updateThinkingWord(_ s: Session) {
+        let prev = prevState[s.id] ?? ""
         guard s.state == "thinking", prev != "thinking" else { return }
         var w = thinkingWords.randomElement() ?? "Thinking"
         if thinkingWords.count > 1 { while w == sessionWord[s.id] { w = thinkingWords.randomElement() ?? w } }
@@ -1042,14 +1080,70 @@ final class StatusController: NSObject, NSMenuDelegate {
             guard let data = fm.contents(atPath: full),
                   let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
             let id = (f as NSString).deletingPathExtension
-            sessions[id] = Session(json: o, id: id)
+            var s = Session(json: o, id: id)
+            // A hook event means activity in that cwd, which may have JUST become a repo (git init /
+            // first branch mid-session) — a cached "" (non-git) would otherwise stick until app restart.
+            if gitHeadCache[s.cwd] == "" { gitHeadCache[s.cwd] = nil }
+            s.branch = branchForCwd(s.cwd)   // only on file change (a hook event), never on a bare tick
+            sessions[id] = s
         }
+    }
+
+    // MARK: git branch (no `git` spawn — .git/HEAD is a tiny text file)
+
+    // Resolve <cwd>'s HEAD path by walking toward /. A worktree/submodule has .git as a FILE
+    // containing "gitdir: <path>". Resolution walks directories, so cache it per cwd; a cached
+    // "" means confirmed non-git. Dropped by branchForCwd if the HEAD read later fails.
+    func gitHeadPath(_ cwd: String) -> String? {
+        if let hit = gitHeadCache[cwd] { return hit.isEmpty ? nil : hit }
+        let fm = FileManager.default
+        var dir = cwd, isDir: ObjCBool = false
+        for _ in 0..<40 {
+            let g = (dir as NSString).appendingPathComponent(".git")
+            if fm.fileExists(atPath: g, isDirectory: &isDir) {
+                var head: String? = nil
+                if isDir.boolValue {
+                    head = (g as NSString).appendingPathComponent("HEAD")
+                } else if let d = fm.contents(atPath: g), d.count <= 4096,
+                          let s = String(data: d, encoding: .utf8),
+                          let line = s.split(separator: "\n").first, line.hasPrefix("gitdir: ") {
+                    var gd = String(line.dropFirst(8)).trimmingCharacters(in: .whitespaces)
+                    if !gd.hasPrefix("/") { gd = ((dir as NSString).appendingPathComponent(gd) as NSString).standardizingPath }
+                    head = (gd as NSString).appendingPathComponent("HEAD")
+                }
+                gitHeadCache[cwd] = head ?? ""
+                return head
+            }
+            let parent = (dir as NSString).deletingLastPathComponent
+            if parent == dir || parent.isEmpty { break }
+            dir = parent
+        }
+        gitHeadCache[cwd] = ""
+        return nil
+    }
+
+    // HEAD is "ref: refs/heads/<branch>" on a branch, a bare commit hash when detached.
+    // nil (no branch text, no error) for non-git dirs and anything unrecognized.
+    func branchForCwd(_ cwd: String) -> String {
+        guard !cwd.isEmpty, let headPath = gitHeadPath(cwd) else { return "" }
+        guard let d = FileManager.default.contents(atPath: headPath), d.count <= 1024,
+              let s = String(data: d, encoding: .utf8) else {
+            gitHeadCache[cwd] = nil   // stale resolution (repo moved/deleted) — retry next time
+            return ""
+        }
+        let head = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if head.hasPrefix("ref: refs/heads/") { return String(head.dropFirst(16)) }
+        if head.hasPrefix("ref: ") { return ((head as NSString).lastPathComponent) }
+        if (40...64).contains(head.count), head.allSatisfy({ $0.isHexDigit && !$0.isUppercase }) {
+            return String(head.prefix(7))   // detached HEAD -> short SHA
+        }
+        return ""
     }
 
     func evaluate() {
         let now = Date().timeIntervalSince1970
-        var chime = false
 
+        var chime = false
         for id in Array(sessions.keys) {
             guard var s = sessions[id] else { continue }
             s.eff = effectiveState(s, now: now)   // compute once per tick; the menu + tooltip reuse it
@@ -1061,15 +1155,36 @@ final class StatusController: NSObject, NSMenuDelegate {
                                  : (s.eff == "idle" && stalePruneAge > 0 && now - s.ts > stalePruneAge)
             if dead {
                 try? FileManager.default.removeItem(atPath: (stateDir as NSString).appendingPathComponent(id + ".json"))
-                sessions[id] = nil; fileMTimes[id + ".json"] = nil; soundPrev[id] = nil; turnStart[id] = nil; sessionWord[id] = nil
+                sessions[id] = nil; fileMTimes[id + ".json"] = nil; prevState[id] = nil; sessionWord[id] = nil
                 continue
             }
             sessions[id] = s
             updateThinkingWord(s)   // must run before soundEdgeDone, which overwrites soundPrev[id]
             if soundEdgeDone(s, now: now) { chime = true }
+            prevState[s.id] = s.state
         }
-        for id in Array(soundPrev.keys) where sessions[id] == nil { soundPrev[id] = nil; turnStart[id] = nil; sessionWord[id] = nil }
         if chime, playCompletionSound { completionSound?.play() }
+        for id in Array(prevState.keys) where sessions[id] == nil { prevState[id] = nil; sessionWord[id] = nil }
+        for id in Array(soundPrev.keys) where sessions[id] == nil { soundPrev[id] = nil; turnStart[id] = nil }
+
+        // Same-named projects (two clones/worktrees of one repo) get a parent-folder qualifier
+        // ("work/myrepo" vs "tmp/myrepo") so their rows stay tellable apart. Runs after the reap so
+        // dead sessions can't force a qualifier onto a now-unique name.
+        // Only non-empty cwds count as colliding locations: a pre-upgrade/warmup file without cwd is
+        // location-unknown, and counting its "" as a distinct place forced a bogus qualifier onto a
+        // genuinely unique row.
+        var cwdsByProject: [String: Set<String>] = [:]
+        for s in sessions.values where !s.project.isEmpty && !s.cwd.isEmpty { cwdsByProject[s.project, default: []].insert(s.cwd) }
+        for id in Array(sessions.keys) {
+            guard var s = sessions[id] else { continue }
+            if !s.cwd.isEmpty, (cwdsByProject[s.project]?.count ?? 0) > 1 {
+                let parent = (((s.cwd as NSString).deletingLastPathComponent) as NSString).lastPathComponent
+                s.displayName = parent.isEmpty ? s.project : parent + "/" + s.project
+            } else {
+                s.displayName = s.project
+            }
+            sessions[id] = s
+        }
 
         // Surface the single highest-priority session (permission > working > …); ties broken by
         // recency, so within a tier the most recently active session wins.
@@ -1106,17 +1221,6 @@ final class StatusController: NSObject, NSMenuDelegate {
         return s.state == "done" ? "idle" : s.state
     }
 
-    // Detect a session's working->done edge for the chime (turns >= 5 min only). Updates the
-    // per-session bookkeeping every call and returns true exactly once per qualifying edge.
-    func soundEdgeDone(_ s: Session, now: Double) -> Bool {
-        let prev = soundPrev[s.id] ?? ""
-        if s.state == "thinking" || s.state == "tool", s.startedAt > 0 { turnStart[s.id] = s.startedAt }
-        var edge = false
-        if s.state == "done", prev != "done", let st = turnStart[s.id], st > 0, now - st >= 300 { edge = true }
-        if s.state == "done" { turnStart[s.id] = 0 }
-        soundPrev[s.id] = s.state
-        return edge
-    }
 
     // MARK: self-quit lifecycle
 
