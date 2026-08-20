@@ -73,3 +73,41 @@ fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
 console.log("Installed status-bar hooks into", settingsPath);
 console.log("Scripts:", updateDest, "and", lifecycleDest);
 console.log("Backup (first run only):", settingsPath + ".bak-statusbar");
+
+// Codex auto-launch (optional): points ~/.codex/hooks.json's SessionStart at codex-lifecycle.js,
+// which only launches the app (never writes session state — Codex's env lacks the Claude vars,
+// and the app discovers Codex sessions itself by polling rollout logs). Skipped silently when
+// ~/.codex doesn't exist. Idempotent: only our own entry (identified by the codex-lifecycle.js
+// basename in its command) is replaced; every other Codex hook is left untouched.
+const codexDir = path.join(home, ".codex");
+if (fs.existsSync(codexDir)) {
+  const codexLifecycleDest = path.join(sbDir, "codex-lifecycle.js");
+  fs.copyFileSync(path.join(__dirname, "codex-lifecycle.js"), codexLifecycleDest);
+  const codexHooksPath = path.join(codexDir, "hooks.json");
+  const CODEX_MARKER = "codex-lifecycle.js";
+
+  let codexHooks = {};
+  if (fs.existsSync(codexHooksPath)) {
+    try { codexHooks = JSON.parse(fs.readFileSync(codexHooksPath, "utf8")); } catch { codexHooks = {}; }
+    const codexBak = codexHooksPath + ".bak-statusbar";
+    if (!fs.existsSync(codexBak)) fs.copyFileSync(codexHooksPath, codexBak);
+  }
+  // process.execPath is a version-pinned Homebrew path (…/Cellar/node/<ver>/bin/node) that a
+  // `brew upgrade node` retires, silently breaking the hook. For Codex (which we may relaunch long
+  // after install) prefer a stable symlink that resolves to this same binary.
+  const codexNode = ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"].find((p) => {
+    try { return fs.realpathSync(p) === process.execPath; } catch { return false; }
+  }) || process.execPath;
+
+  codexHooks.hooks = codexHooks.hooks || {};
+  codexHooks.hooks.SessionStart = (codexHooks.hooks.SessionStart || [])
+    .map((entry) => ({
+      ...entry,
+      hooks: (entry.hooks || []).filter((h) => !(h.command || "").includes(CODEX_MARKER)),
+    }))
+    .filter((entry) => (entry.hooks || []).length > 0);
+  codexHooks.hooks.SessionStart.push({ hooks: [{ type: "command", command: `${codexNode} ${codexLifecycleDest}` }] });
+
+  fs.writeFileSync(codexHooksPath, JSON.stringify(codexHooks, null, 2) + "\n");
+  console.log("Installed Codex launch hook into", codexHooksPath);
+}

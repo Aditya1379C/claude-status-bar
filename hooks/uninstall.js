@@ -28,3 +28,19 @@ for (const evt of Object.keys(settings.hooks || {})) {
 }
 fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
 console.log("Removed status-bar hooks from", settingsPath);
+
+// Remove only the Codex auto-launch entry install.js added, leaving every other Codex hook alone.
+const codexHooksPath = path.join(home, ".codex", "hooks.json");
+if (fs.existsSync(codexHooksPath)) {
+  try {
+    const codexHooks = JSON.parse(fs.readFileSync(codexHooksPath, "utf8"));
+    for (const evt of Object.keys(codexHooks.hooks || {})) {
+      codexHooks.hooks[evt] = (codexHooks.hooks[evt] || [])
+        .map((e) => ({ ...e, hooks: (e.hooks || []).filter((h) => !(h.command || "").includes("codex-lifecycle.js")) }))
+        .filter((e) => (e.hooks || []).length > 0);
+      if (codexHooks.hooks[evt].length === 0) delete codexHooks.hooks[evt];
+    }
+    fs.writeFileSync(codexHooksPath, JSON.stringify(codexHooks, null, 2) + "\n");
+    console.log("Removed Codex launch hook from", codexHooksPath);
+  } catch {}
+}

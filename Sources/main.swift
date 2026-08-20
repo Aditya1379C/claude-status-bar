@@ -277,6 +277,12 @@ final class StatusController: NSObject, NSMenuDelegate {
         var branch: String = ""      // git branch (or short SHA when detached); "" outside a repo
         var displayName: String = "" // project, parent-qualified when two live sessions share a name
 
+        enum Source: Equatable { case claude, codex }
+        var source: Source = .claude
+        // Codex-only (unused for Claude):
+        var codexTokens: Int? = nil        // total_token_usage.total_tokens
+        var codexCtxWindow: Int? = nil     // model_context_window (nil = unknown -> show tokens without %)
+
         init(json o: [String: Any], id: String) {
             self.id = id
             self.state = o["state"] as? String ?? "idle"
@@ -305,6 +311,16 @@ final class StatusController: NSObject, NSMenuDelegate {
     var activeBase = ""        // label without the elapsed clock
     var startedAt: Double = 0  // unix seconds the current turn began (0 = no clock)
     var activeColor: NSColor? = nil
+
+    // Codex integration (see CodexSource.swift): polled from ~/.codex/sessions rollout logs, never
+    // pid-reaped (Codex sessions live only in this dict, pruned by staleness each reloadCodexSessions()).
+    var codexSessions: [String: Session] = [:]      // id -> most recent parsed Codex session (recent files only)
+    var codexFileMTimes: [String: Date] = [:]       // rollout path -> last-parsed mtime (re-tail only on change)
+    var codexNames: [String: String] = [:]          // id -> thread_name (from session_index.jsonl)
+    var codexNamesMTime: Date? = nil                 // session_index.jsonl mtime when codexNames was built
+    var codexUsage: CodexUsage? = nil               // account-wide rate-limit snapshot (freshest seen)
+    let codexDir = (NSHomeDirectory() as NSString).appendingPathComponent(".codex")
+    let codexActiveWindow: TimeInterval = 20         // mtime within this => "working"; heuristic, tune later
 
     let brand = NSColor(srgbRed: 0.851, green: 0.467, blue: 0.341, alpha: 1) // #d97757, Anthropic's official "Orange" accent
     let amber = NSColor(srgbRed: 0.95, green: 0.73, blue: 0.18, alpha: 1) // "awaiting permission" yellow dot
@@ -566,17 +582,27 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
         if visible.isEmpty, let lead = ordered.first { visible = [lead] }   // floor: never empty while alive
 
-        // Same priority rule as tick()'s `lead`: highest-priority effective state, ties broken by
-        // recency. Only this session gets the context-usage rows, and only if it's actually shown.
-        let activeLead = sessions.values.max { a, b in
+        // Codex rows obey the same idle-hide rule as Claude, but never get a forced floor (an idle
+        // Codex-only account with no live session should just show nothing Codex-related).
+        let codexVisible = codexSessions.values.filter { s in
+            let resting = s.eff != "thinking"
+            return !(stalePruneAge > 0 && resting && now - s.ts > stalePruneAge)
+        }
+        // Merge both sources into one recency-ordered list for a single unified "Sessions" section.
+        let combinedVisible = (visible + codexVisible).sorted { $0.ts > $1.ts }
+
+        // Same priority rule as tick()'s `lead`, but over Claude + Codex combined: highest-priority
+        // effective state, ties broken by recency. Only this session gets the context-usage rows,
+        // and only if it's actually shown.
+        let activeLead = (Array(sessions.values) + Array(codexSessions.values)).max { a, b in
             let pa = priority(of: a.eff.isEmpty ? effectiveState(a, now: now) : a.eff)
             let pb = priority(of: b.eff.isEmpty ? effectiveState(b, now: now) : b.eff)
             return pa == pb ? a.ts < b.ts : pa < pb
         }
 
-        if !visible.isEmpty {
+        if !combinedVisible.isEmpty {
             menu.addItem(header("Sessions"))
-            for s in visible {
+            for s in combinedVisible {
                 let eff = s.eff.isEmpty ? effectiveState(s, now: now) : s.eff
                 let view = SessionRowView(id: s.id, width: CGFloat(uiConfig()["boxWidth"] ?? 300))
                 let sid = s.id, ep = s.entrypoint, tp = s.termProgram
@@ -586,9 +612,16 @@ final class StatusController: NSObject, NSMenuDelegate {
                 it.view = view
                 menu.addItem(it)
                 sessionMenuItems.append((it, s.id))  // kept so tick() can live-update the timers
-                if s.id == activeLead?.id {
-                    for row in contextInfoRows(for: s) { menu.addItem(row) }
+                if s.id == activeLead?.id, s.source == activeLead?.source {
+                    let rows = s.source == .codex ? codexContextRows(for: s) : contextInfoRows(for: s)
+                    for row in rows { menu.addItem(row) }
                 }
+            }
+            // Account-wide Codex plan-usage gauge: only when a Codex row is actually visible, so it
+            // never lingers as stale-forever data once Codex activity has aged out of the list.
+            if let usage = codexUsage, !codexVisible.isEmpty {
+                menu.addItem(codexGaugeRow(usage.primary))
+                if let secondary = usage.secondary { menu.addItem(codexGaugeRow(secondary)) }
             }
             menu.addItem(.separator())
         } else if claudeDesktopRunning() {
@@ -782,7 +815,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         if eff == "thinking" || eff == "tool", s.startedAt > 0 {
             line += "  " + elapsed(max(0, Int(now - s.startedAt)))
         }
-        return line
+        return s.source == .codex ? "Codex: " + line : line
     }
 
     // Live layout knobs read fresh from ~/.claude/statusbar/uiconfig.json each render, so numeric
@@ -803,7 +836,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         let nameMax = Int(cfg["nameMax"] ?? 48)
         let working = (eff == "thinking" || eff == "tool") && s.startedAt > 0
         let resting = !(eff == "permission" || eff == "thinking" || eff == "tool")  // the dim caret
-        let tag = surfaceTag(s.entrypoint)
+        let tag = s.source == .codex ? "CODEX" : surfaceTag(s.entrypoint)
         v.configure(icon: sessionSymbol(s, eff: eff),
                     iconTint: resting ? .tertiaryLabelColor : .labelColor,  // caret dim; spinner matches the name font; amber image ignores tint
                     spinning: (eff == "thinking" || eff == "tool"),
@@ -834,7 +867,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     // on a name collision) for CLI sessions and not-yet-titled chats. Surface (CLI/APP) still
     // renders as a trailing badge.
     func sessionName(_ s: Session) -> String {
-        if let title = chatTitleIndex[s.id], !title.isEmpty { return title }
+        if s.source != .codex, let title = chatTitleIndex[s.id], !title.isEmpty { return title }
         if !s.displayName.isEmpty { return s.displayName }
         return s.project.isEmpty ? "session" : s.project
     }
@@ -1052,6 +1085,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     func tick() {
         checkLifecycle()
         reloadSessions()
+        reloadCodexSessions()
         evaluate()
         if menuIsOpen { refreshOpenMenuRows() }
     }
@@ -1187,8 +1221,10 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
 
         // Surface the single highest-priority session (permission > working > …); ties broken by
-        // recency, so within a tier the most recently active session wins.
-        let lead = sessions.values.max { a, b in
+        // recency, so within a tier the most recently active session wins. Codex sessions are folded
+        // in here ONLY (their `eff` is set by reloadCodexSessions()); they never go through the
+        // pid-reap loop above, so this is the sole place Claude + Codex combine.
+        let lead = (Array(sessions.values) + Array(codexSessions.values)).max { a, b in
             let pa = priority(of: a.eff), pb = priority(of: b.eff)
             return pa == pb ? a.ts < b.ts : pa < pb
         }
@@ -1242,7 +1278,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     func checkLifecycle() {
         let now = Date()
         if now.timeIntervalSince(launchedAt) < launchGrace { return }
-        if claudeDesktopRunning() || sessionCount() > 0 {
+        if claudeDesktopRunning() || sessionCount() > 0 || !codexSessions.isEmpty {
             notNeededSince = nil
             return
         }
