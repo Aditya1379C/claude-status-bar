@@ -246,6 +246,63 @@ final class SessionRowView: NSView {
     override func mouseDown(with event: NSEvent) { onClick?() }
 }
 
+// A two-segment pill ("Claude | Codex") that switches which session group the dropdown shows.
+// Custom drawing + mouseUp hit-testing (like SessionRowView) so it responds while the menu is
+// tracking; a plain NSSegmentedControl does not reliably receive clicks inside an open menu.
+// Index-based (0/1) to stay decoupled from the controller's tab enum.
+final class TabBarView: NSView {
+    private let titles: [String]
+    private var activeIndex: Int
+    var onSelect: ((Int) -> Void)?
+    private let pad: CGFloat = 14, rowH: CGFloat = 30, segH: CGFloat = 22
+
+    init(width: CGFloat, titles: [String], active: Int) {
+        self.titles = titles
+        self.activeIndex = active
+        super.init(frame: NSRect(x: 0, y: 0, width: width, height: rowH))
+        autoresizingMask = [.width]
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func setActive(_ i: Int) { activeIndex = i; needsDisplay = true }
+
+    private func segmentRects() -> [NSRect] {
+        let w = bounds.width - pad * 2
+        let segW = titles.isEmpty ? 0 : w / CGFloat(titles.count)
+        let y = (bounds.height - segH) / 2
+        return (0..<titles.count).map { NSRect(x: pad + CGFloat($0) * segW, y: y, width: segW, height: segH) }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let rects = segmentRects()
+        guard let first = rects.first, let last = rects.last else { return }
+        let outer = NSRect(x: first.minX, y: first.minY, width: last.maxX - first.minX, height: segH)
+        let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        (dark ? NSColor.white : NSColor.black).withAlphaComponent(0.08).setFill()
+        NSBezierPath(roundedRect: outer, xRadius: 6, yRadius: 6).fill()
+        let font = NSFont.menuFont(ofSize: 0)
+        for (i, r) in rects.enumerated() {
+            let selected = i == activeIndex
+            if selected {
+                NSColor.controlAccentColor.setFill()
+                NSBezierPath(roundedRect: r.insetBy(dx: 2, dy: 2), xRadius: 5, yRadius: 5).fill()
+            }
+            let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: selected ? NSColor.white : NSColor.secondaryLabelColor]
+            let t = titles[i] as NSString
+            let ts = t.size(withAttributes: attrs)
+            t.draw(at: NSPoint(x: r.midX - ts.width / 2, y: r.midY - ts.height / 2), withAttributes: attrs)
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        for (i, r) in segmentRects().enumerated() where r.contains(p) {
+            if i != activeIndex { setActive(i); onSelect?(i) }
+            return
+        }
+    }
+}
+
 final class StatusController: NSObject, NSMenuDelegate {
     let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let stateDir = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/state.d")
@@ -282,6 +339,8 @@ final class StatusController: NSObject, NSMenuDelegate {
         // Codex-only (unused for Claude):
         var codexTokens: Int? = nil        // last_token_usage.total_tokens = current context occupancy
         var codexCtxWindow: Int? = nil     // model_context_window (nil = unknown -> show tokens without %)
+        var codexPrimary: CodexWindow? = nil   // this session's own rate-limit window (drives the gauge)
+        var codexSecondary: CodexWindow? = nil // the second window, when the plan has one
 
         init(json o: [String: Any], id: String) {
             self.id = id
@@ -318,9 +377,14 @@ final class StatusController: NSObject, NSMenuDelegate {
     var codexFileMTimes: [String: Date] = [:]       // rollout path -> last-parsed mtime (re-tail only on change)
     var codexNames: [String: String] = [:]          // id -> thread_name (from session_index.jsonl)
     var codexNamesMTime: Date? = nil                 // session_index.jsonl mtime when codexNames was built
-    var codexUsage: CodexUsage? = nil               // account-wide rate-limit snapshot (freshest seen)
     let codexDir = (NSHomeDirectory() as NSString).appendingPathComponent(".codex")
     let codexActiveWindow: TimeInterval = 20         // mtime within this => "working"; heuristic, tune later
+
+    // Dropdown source tabs (0 = Claude, 1 = Codex). Persisted so the menu reopens on the last pick.
+    // Both groups' rows are added to the menu; the segmented control toggles their isHidden in place.
+    var storedTabIndex: Int { UserDefaults.standard.string(forKey: "activeSourceTab") == "codex" ? 1 : 0 }
+    var tabGroups: (claude: [NSMenuItem], codex: [NSMenuItem]) = ([], [])
+    weak var tabBarView: TabBarView?
 
     let brand = NSColor(srgbRed: 0.851, green: 0.467, blue: 0.341, alpha: 1) // #d97757, Anthropic's official "Orange" accent
     let amber = NSColor(srgbRed: 0.95, green: 0.73, blue: 0.18, alpha: 1) // "awaiting permission" yellow dot
@@ -534,6 +598,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     func menuDidClose(_ menu: NSMenu) {
         menuIsOpen = false
         sessionMenuItems.removeAll()
+        tabGroups = ([], [])
     }
 
     // The session SET only changes on reopen (NSMenu can't add/remove rows reliably mid-track).
@@ -588,41 +653,63 @@ final class StatusController: NSObject, NSMenuDelegate {
             let resting = s.eff != "thinking"
             return !(stalePruneAge > 0 && resting && now - s.ts > stalePruneAge)
         }
-        // Merge both sources into one recency-ordered list for a single unified "Sessions" section.
-        let combinedVisible = (visible + codexVisible).sorted { $0.ts > $1.ts }
+        let codexOrdered = codexVisible.sorted { $0.ts > $1.ts }
 
-        // Same priority rule as tick()'s `lead`, but over Claude + Codex combined: highest-priority
-        // effective state, ties broken by recency. Only this session gets the context-usage rows,
-        // and only if it's actually shown.
+        // Priority lead over Claude + Codex combined (same rule as tick()'s icon `lead`): only this
+        // session gets the context-usage rows, and only when it's actually shown.
         let activeLead = (Array(sessions.values) + Array(codexSessions.values)).max { a, b in
             let pa = priority(of: a.eff.isEmpty ? effectiveState(a, now: now) : a.eff)
             let pb = priority(of: b.eff.isEmpty ? effectiveState(b, now: now) : b.eff)
             return pa == pb ? a.ts < b.ts : pa < pb
         }
 
-        if !combinedVisible.isEmpty {
-            menu.addItem(header("Sessions"))
-            for s in combinedVisible {
-                let eff = s.eff.isEmpty ? effectiveState(s, now: now) : s.eff
-                let view = SessionRowView(id: s.id, width: CGFloat(uiConfig()["boxWidth"] ?? 300))
-                let sid = s.id, ep = s.entrypoint, tp = s.termProgram
-                view.onClick = { [weak self] in menu.cancelTracking(); self?.openSession(sid, entrypoint: ep, termProgram: tp) }
-                configureSessionRow(view, s, eff: eff)
-                let it = NSMenuItem()
-                it.view = view
-                menu.addItem(it)
-                sessionMenuItems.append((it, s.id))  // kept so tick() can live-update the timers
-                if s.id == activeLead?.id, s.source == activeLead?.source {
-                    let rows = s.source == .codex ? codexContextRows(for: s) : contextInfoRows(for: s)
-                    for row in rows { menu.addItem(row) }
+        // Tabs only matter once Codex is in the picture. A pure-Claude machine (no ~/.codex, no Codex
+        // session) keeps the exact prior single-list dropdown, untouched.
+        let codexRelevant = !codexOrdered.isEmpty || FileManager.default.fileExists(atPath: codexDir)
+        if codexRelevant {
+            var claudeItems: [NSMenuItem] = []
+            for s in visible { claudeItems += sessionRowItems(s, menu: menu, activeLead: activeLead, now: now) }
+            if visible.isEmpty {
+                if claudeDesktopRunning() {
+                    let open = NSMenuItem(title: "Open Claude", action: #selector(openClaude), keyEquivalent: "")
+                    open.target = self
+                    claudeItems.append(open)
+                } else {
+                    claudeItems.append(placeholderRow("No active Claude sessions"))
                 }
             }
-            // Account-wide Codex plan-usage gauge: only when a Codex row is actually visible, so it
-            // never lingers as stale-forever data once Codex activity has aged out of the list.
-            if let usage = codexUsage, !codexVisible.isEmpty {
-                menu.addItem(codexGaugeRow(usage.primary))
-                if let secondary = usage.secondary { menu.addItem(codexGaugeRow(secondary)) }
+
+            var codexItems: [NSMenuItem] = []
+            for s in codexOrdered { codexItems += sessionRowItems(s, menu: menu, activeLead: activeLead, now: now) }
+            // Codex plan-usage gauge from the most-recently-active VISIBLE Codex session's own reading,
+            // so the label tracks the session you're looking at (two plans running would otherwise flip
+            // it between, say, plus/weekly and go/monthly).
+            if let g = codexVisible.filter({ $0.codexPrimary != nil }).max(by: { $0.ts < $1.ts }),
+               let primary = g.codexPrimary {
+                codexItems.append(codexGaugeRow(primary))
+                if let secondary = g.codexSecondary { codexItems.append(codexGaugeRow(secondary)) }
             }
+            if codexOrdered.isEmpty { codexItems.append(placeholderRow("No active Codex sessions")) }
+
+            // Honor the stored tab, but land on the populated one when the stored tab is empty (so the
+            // menu never opens on a blank pane) without overwriting the saved preference.
+            var tabIndex = storedTabIndex
+            if tabIndex == 0 && visible.isEmpty && !codexOrdered.isEmpty { tabIndex = 1 }
+            if tabIndex == 1 && codexOrdered.isEmpty && !visible.isEmpty { tabIndex = 0 }
+
+            let tabBar = TabBarView(width: CGFloat(uiConfig()["boxWidth"] ?? 300), titles: ["Claude", "Codex"], active: tabIndex)
+            tabBar.onSelect = { [weak self] i in self?.selectTab(i) }
+            let tabItem = NSMenuItem(); tabItem.view = tabBar
+            menu.addItem(tabItem)
+            tabBarView = tabBar
+
+            for it in claudeItems { it.isHidden = tabIndex != 0; menu.addItem(it) }
+            for it in codexItems { it.isHidden = tabIndex != 1; menu.addItem(it) }
+            tabGroups = (claudeItems, codexItems)
+            menu.addItem(.separator())
+        } else if !visible.isEmpty {
+            menu.addItem(header("Sessions"))
+            for s in visible { for it in sessionRowItems(s, menu: menu, activeLead: activeLead, now: now) { menu.addItem(it) } }
             menu.addItem(.separator())
         } else if claudeDesktopRunning() {
             // No live session to pin, but the desktop app is up — give a way to jump back in.
@@ -712,6 +799,40 @@ final class StatusController: NSObject, NSMenuDelegate {
         let q = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
         q.target = self
         menu.addItem(q)
+    }
+
+    // Builds a session's row (registered for live timer updates) plus its context rows when it is the
+    // active lead. Shared by both the tabbed and legacy single-list layouts.
+    func sessionRowItems(_ s: Session, menu: NSMenu, activeLead: Session?, now: Double) -> [NSMenuItem] {
+        let eff = s.eff.isEmpty ? effectiveState(s, now: now) : s.eff
+        let view = SessionRowView(id: s.id, width: CGFloat(uiConfig()["boxWidth"] ?? 300))
+        let sid = s.id, ep = s.entrypoint, tp = s.termProgram
+        view.onClick = { [weak self] in menu.cancelTracking(); self?.openSession(sid, entrypoint: ep, termProgram: tp) }
+        configureSessionRow(view, s, eff: eff)
+        let it = NSMenuItem()
+        it.view = view
+        sessionMenuItems.append((it, s.id))  // kept so tick() can live-update the timers
+        var items = [it]
+        if s.id == activeLead?.id, s.source == activeLead?.source {
+            items += (s.source == .codex ? codexContextRows(for: s) : contextInfoRows(for: s))
+        }
+        return items
+    }
+
+    // Disabled secondary-text row shown when a tab has no live sessions.
+    func placeholderRow(_ text: String) -> NSMenuItem {
+        let it = NSMenuItem(title: text, action: nil, keyEquivalent: "")
+        it.isEnabled = false
+        return it
+    }
+
+    // Segmented-tab click: persist the choice and toggle the two groups' visibility in place. NSMenu
+    // reflows hidden items, so the switch is live without the unreliable mid-track add/remove.
+    func selectTab(_ index: Int) {
+        UserDefaults.standard.set(index == 1 ? "codex" : "claude", forKey: "activeSourceTab")
+        for it in tabGroups.claude { it.isHidden = index != 0 }
+        for it in tabGroups.codex { it.isHidden = index != 1 }
+        tabBarView?.setActive(index)
     }
 
     func header(_ title: String) -> NSMenuItem {

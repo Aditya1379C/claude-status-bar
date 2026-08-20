@@ -10,13 +10,6 @@ struct CodexWindow {
     let resetsAt: Double   // real wall-clock unix seconds
 }
 
-struct CodexUsage {
-    let primary: CodexWindow
-    let secondary: CodexWindow?
-    let plan: String
-    let sampledAt: Date   // mtime of the rollout file this reading came from, not "now"
-}
-
 extension StatusController {
 
     // MARK: session discovery
@@ -26,8 +19,7 @@ extension StatusController {
     // retention window simply stops appearing — Codex sessions are never pid-reaped.
     func reloadCodexSessions() {
         let fm = FileManager.default
-        let now = Date()
-        let nowTs = now.timeIntervalSince1970
+        let nowTs = Date().timeIntervalSince1970
 
         reloadCodexNamesIfNeeded()
 
@@ -36,7 +28,6 @@ extension StatusController {
 
         var newSessions: [String: Session] = [:]
         var newMTimes: [String: Date] = [:]
-        var bestUsageThisCall: (rl: (primary: CodexWindow, secondary: CodexWindow?, plan: String), mtime: Double)? = nil
 
         for path in candidates {
             guard let attrs = try? fm.attributesOfItem(atPath: path),
@@ -48,16 +39,13 @@ extension StatusController {
             let filename = (path as NSString).lastPathComponent
             guard let id = codexSessionId(fromFilename: filename) else { continue }
 
+            // A reused (mtime-unchanged) session carries its rate-limit fields forward automatically,
+            // since they live on the Session — so a session that goes quiet keeps its last reading.
             var session: Session
-            var rateLimits: (primary: CodexWindow, secondary: CodexWindow?, plan: String)? = nil
-            var reused = false
-
             if codexFileMTimes[path] == mtime, let existing = codexSessions[id] {
                 session = existing
-                reused = true
             } else if let parsed = parseCodexRollout(path: path, id: id) {
-                session = parsed.session
-                rateLimits = parsed.rateLimits
+                session = parsed
             } else {
                 continue
             }
@@ -69,24 +57,10 @@ extension StatusController {
 
             newSessions[id] = session
             newMTimes[path] = mtime
-
-            if !reused, let rl = rateLimits {
-                if bestUsageThisCall == nil || mtimeTs > bestUsageThisCall!.mtime {
-                    bestUsageThisCall = (rl, mtimeTs)
-                }
-            }
         }
 
         codexSessions = newSessions
         codexFileMTimes = newMTimes
-
-        // Only overwrite if this call's freshest reading is at least as new as what we're already
-        // holding — a session with null rate_limits never clears a prior good reading.
-        if let best = bestUsageThisCall,
-           codexUsage == nil || best.mtime >= codexUsage!.sampledAt.timeIntervalSince1970 {
-            codexUsage = CodexUsage(primary: best.rl.primary, secondary: best.rl.secondary,
-                                     plan: best.rl.plan, sampledAt: Date(timeIntervalSince1970: best.mtime))
-        }
     }
 
     // Rebuilds codexNames from ~/.codex/session_index.jsonl only when its mtime changed.
@@ -146,8 +120,7 @@ extension StatusController {
     // event_msg, scanning from the end so the FIRST match found is the most recent. Torn/truncated
     // tail lines fail their JSON parse and are skipped; a lossy UTF-8 decode means a split leading
     // multibyte char never drops the whole read (mirrors contextTokens(ofFileAt:)).
-    private func parseCodexRollout(path: String, id: String)
-        -> (session: Session, rateLimits: (primary: CodexWindow, secondary: CodexWindow?, plan: String)?)? {
+    private func parseCodexRollout(path: String, id: String) -> Session? {
         guard let fh = FileHandle(forReadingAtPath: path) else { return nil }
         defer { try? fh.close() }
         let size = (try? fh.seekToEnd()) ?? 0
@@ -173,7 +146,8 @@ extension StatusController {
 
         var tokens: Int? = nil
         var ctxWindow: Int? = nil
-        var rateLimits: (primary: CodexWindow, secondary: CodexWindow?, plan: String)? = nil
+        var primaryWindow: CodexWindow? = nil
+        var secondaryWindow: CodexWindow? = nil
 
         for line in tailStr.split(separator: "\n").reversed() {
             guard line.contains("token_count") else { continue }
@@ -193,8 +167,8 @@ extension StatusController {
             }
             if let rl = payload["rate_limits"] as? [String: Any],
                let p = rl["primary"] as? [String: Any], let primary = codexWindow(from: p) {
-                let secondary = (rl["secondary"] as? [String: Any]).flatMap(codexWindow(from:))
-                rateLimits = (primary, secondary, rl["plan_type"] as? String ?? "")
+                primaryWindow = primary
+                secondaryWindow = (rl["secondary"] as? [String: Any]).flatMap(codexWindow(from:))
             }
             break   // first hit scanning backward = most recent
         }
@@ -210,7 +184,9 @@ extension StatusController {
         s.displayName = resolvedName
         s.codexTokens = tokens
         s.codexCtxWindow = ctxWindow
-        return (s, rateLimits)
+        s.codexPrimary = primaryWindow
+        s.codexSecondary = secondaryWindow
+        return s
     }
 
     private func codexWindow(from dict: [String: Any]) -> CodexWindow? {
@@ -244,11 +220,14 @@ extension StatusController {
         }
     }
 
-    // Live countdown against the real resets_at, never a stale absolute reading.
+    // Live countdown against the real resets_at, never a stale absolute reading. Tiered by magnitude
+    // so a weekly/monthly window reads in days (not an unwieldy "140h") while a 5h window stays in
+    // minutes/hours.
     private func codexResetCaption(_ resetsAt: Double) -> String {
         let secs = max(0, resetsAt - Date().timeIntervalSince1970)
         if secs < 3600 { return "resets in \(max(1, Int(secs / 60)))m" }
-        return "resets in \(Int(secs / 3600))h"
+        if secs < 86400 { return "resets in \(Int(secs / 3600))h" }
+        return "resets in \(Int(secs / 86400))d"
     }
 
     // One disabled gauge row: window name, a filled track (brand fill / tertiary track), and a
