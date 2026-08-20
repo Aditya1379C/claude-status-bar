@@ -280,7 +280,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         enum Source: Equatable { case claude, codex }
         var source: Source = .claude
         // Codex-only (unused for Claude):
-        var codexTokens: Int? = nil        // total_token_usage.total_tokens
+        var codexTokens: Int? = nil        // last_token_usage.total_tokens = current context occupancy
         var codexCtxWindow: Int? = nil     // model_context_window (nil = unknown -> show tokens without %)
 
         init(json o: [String: Any], id: String) {

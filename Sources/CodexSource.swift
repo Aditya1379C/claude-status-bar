@@ -183,7 +183,10 @@ extension StatusController {
                   let payload = obj["payload"] as? [String: Any],
                   payload["type"] as? String == "token_count" else { continue }
             if let info = payload["info"] as? [String: Any] {
-                if let usage = info["total_token_usage"] as? [String: Any] {
+                // last_token_usage is the most recent request's tokens = what's currently in the
+                // context window. total_token_usage is the session's CUMULATIVE lifetime spend
+                // (grows unbounded, dwarfs the window), which is not "context size".
+                if let usage = info["last_token_usage"] as? [String: Any] {
                     tokens = (usage["total_tokens"] as? NSNumber)?.intValue
                 }
                 ctxWindow = (info["model_context_window"] as? NSNumber)?.intValue
