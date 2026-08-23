@@ -51,7 +51,11 @@ extension StatusController {
             }
 
             session.ts = mtimeTs
-            let eff = (nowTs - mtimeTs <= codexActiveWindow) ? "thinking" : "idle"
+            // Working = a recent write AND the turn hasn't ended. The completion marker snaps a
+            // finished turn straight to idle even though the file was just written, so the icon does
+            // not keep animating for a full window after Codex is done.
+            let recent = nowTs - mtimeTs <= codexActiveWindow
+            let eff = (recent && !session.codexTurnComplete) ? "thinking" : "idle"
             session.eff = eff
             session.state = eff
 
@@ -85,24 +89,20 @@ extension StatusController {
         codexNames = names
     }
 
-    // Only today's and yesterday's date dirs (sessions/<Y>/<M>/<D>, zero-padded) — bounded
-    // enumeration, midnight-safe (a session started yesterday still lives in yesterday's dir).
-    // Missing dirs are fine.
+    // All rollout files under sessions/, recursively. A long-lived Codex thread keeps appending to
+    // the rollout in its ORIGINAL start-date dir, so a date-windowed scan (today/yesterday) misses a
+    // days-old session that is still active right now. The mtime filter in reloadCodexSessions is
+    // what limits us to recent ones; discovery just needs to see every file. Cheap: the tree holds a
+    // few dozen files and we only stat, never read, here.
     private func codexCandidateRollouts() -> [String] {
         let fm = FileManager.default
-        let cal = Calendar(identifier: .gregorian)
-        let now = Date()
+        let sessionsRoot = (codexDir as NSString).appendingPathComponent("sessions")
+        guard let en = fm.enumerator(atPath: sessionsRoot) else { return [] }
         var paths: [String] = []
-        for dayOffset in [0, -1] {
-            guard let day = cal.date(byAdding: .day, value: dayOffset, to: now) else { continue }
-            let c = cal.dateComponents([.year, .month, .day], from: day)
-            guard let y = c.year, let mo = c.month, let d = c.day else { continue }
-            let dirPath = (codexDir as NSString)
-                .appendingPathComponent("sessions/\(y)/\(String(format: "%02d", mo))/\(String(format: "%02d", d))")
-            guard let files = try? fm.contentsOfDirectory(atPath: dirPath) else { continue }
-            for f in files where f.hasPrefix("rollout-") && f.hasSuffix(".jsonl") {
-                paths.append((dirPath as NSString).appendingPathComponent(f))
-            }
+        for case let sub as String in en {
+            let name = (sub as NSString).lastPathComponent
+            guard name.hasPrefix("rollout-"), name.hasSuffix(".jsonl") else { continue }
+            paths.append((sessionsRoot as NSString).appendingPathComponent(sub))
         }
         return paths
     }
@@ -186,7 +186,21 @@ extension StatusController {
         s.codexCtxWindow = ctxWindow
         s.codexPrimary = primaryWindow
         s.codexSecondary = secondaryWindow
+        s.codexTurnComplete = codexTurnIsComplete(tailStr)
         return s
+    }
+
+    // A turn is "complete" (Codex is idle, waiting for input) when the file's last event is a
+    // completion/idle marker; while generating or running tools the last event is a streaming item,
+    // so "not complete" plus a recent write means working. Defaults to complete (idle) when the last
+    // line is unparseable, so a torn tail never fakes activity.
+    private func codexTurnIsComplete(_ tailStr: String) -> Bool {
+        guard let last = tailStr.split(separator: "\n").last(where: { !$0.isEmpty }),
+              let d = last.data(using: .utf8),
+              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return true }
+        let t = ((o["payload"] as? [String: Any])?["type"] as? String) ?? (o["type"] as? String) ?? ""
+        let done: Set<String> = ["task_complete", "turn_complete", "turn_aborted", "turn.completed", "session_end", "session_meta"]
+        return done.contains(t)
     }
 
     private func codexWindow(from dict: [String: Any]) -> CodexWindow? {

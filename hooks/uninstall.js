@@ -15,6 +15,13 @@ const AGENT_LABEL = "com.local.claudestatusbar.watcher";
 const agentPlist = path.join(home, "Library", "LaunchAgents", AGENT_LABEL + ".plist");
 try { cp.execSync(`launchctl bootout gui/${process.getuid()}/${AGENT_LABEL}`, { stdio: "ignore" }); } catch {}
 if (fs.existsSync(agentPlist)) { fs.rmSync(agentPlist); console.log("Removed desktop watcher LaunchAgent."); }
+
+// Tear down the Codex launch guardian LaunchAgent (best-effort; safe if absent).
+const CODEXWATCH_LABEL = "com.local.claudestatusbar.codexwatch";
+const codexWatchPlist = path.join(home, "Library", "LaunchAgents", CODEXWATCH_LABEL + ".plist");
+try { cp.execSync(`launchctl bootout gui/${process.getuid()}/${CODEXWATCH_LABEL}`, { stdio: "ignore" }); } catch {}
+if (fs.existsSync(codexWatchPlist)) { fs.rmSync(codexWatchPlist); console.log("Removed Codex launch guardian LaunchAgent."); }
+
 try { cp.execSync("pkill -x ClaudeStatusBar", { stdio: "ignore" }); } catch {}
 
 if (!fs.existsSync(settingsPath)) { console.log("No settings.json; nothing to do."); process.exit(0); }

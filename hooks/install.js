@@ -111,3 +111,40 @@ if (fs.existsSync(codexDir)) {
   fs.writeFileSync(codexHooksPath, JSON.stringify(codexHooks, null, 2) + "\n");
   console.log("Installed Codex launch hook into", codexHooksPath);
 }
+
+// Codex auto-launch guardian (LaunchAgent). The Codex app is the ChatGPT desktop app
+// (com.openai.codex), which does NOT execute ~/.codex/hooks.json, so a hook cannot launch us when
+// you open Codex without Claude. This agent polls on a short interval and launches the app whenever
+// Codex is open and the app is not already running; the app self-quits once neither Codex nor Claude
+// is around. Skipped when neither ~/.codex nor ChatGPT.app is present.
+if (fs.existsSync(codexDir) || fs.existsSync("/Applications/ChatGPT.app")) {
+  const watchDest = path.join(sbDir, "codex-watch.js");
+  fs.copyFileSync(path.join(__dirname, "codex-watch.js"), watchDest);
+  const guardNode = ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"].find((p) => {
+    try { return fs.realpathSync(p) === process.execPath; } catch { return false; }
+  }) || process.execPath;
+  const CODEXWATCH_LABEL = "com.local.claudestatusbar.codexwatch";
+  const plistPath = path.join(home, "Library", "LaunchAgents", CODEXWATCH_LABEL + ".plist");
+  const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${CODEXWATCH_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${guardNode}</string>
+    <string>${watchDest}</string>
+  </array>
+  <key>StartInterval</key><integer>15</integer>
+  <key>RunAtLoad</key><true/>
+  <key>ProcessType</key><string>Background</string>
+</dict>
+</plist>
+`;
+  fs.mkdirSync(path.dirname(plistPath), { recursive: true });
+  fs.writeFileSync(plistPath, plist);
+  const uid = process.getuid();
+  try { cp.execSync(`launchctl bootout gui/${uid}/${CODEXWATCH_LABEL}`, { stdio: "ignore" }); } catch {}
+  try { cp.execSync(`launchctl bootstrap gui/${uid} "${plistPath}"`, { stdio: "ignore" }); } catch {}
+  console.log("Installed Codex launch guardian:", plistPath);
+}

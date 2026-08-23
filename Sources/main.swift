@@ -307,6 +307,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let stateDir = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/state.d")
     let claudeDesktopBundleID = "com.anthropic.claudefordesktop"
+    let codexAppBundleID = "com.openai.codex"   // the ChatGPT desktop app that hosts Codex
 
     var pollTimer: Timer?
     var animTimer: Timer?
@@ -341,6 +342,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         var codexCtxWindow: Int? = nil     // model_context_window (nil = unknown -> show tokens without %)
         var codexPrimary: CodexWindow? = nil   // this session's own rate-limit window (drives the gauge)
         var codexSecondary: CodexWindow? = nil // the second window, when the plan has one
+        var codexTurnComplete: Bool = true     // last rollout event was a completion marker (idle, not mid-turn)
 
         init(json o: [String: Any], id: String) {
             self.id = id
@@ -378,7 +380,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     var codexNames: [String: String] = [:]          // id -> thread_name (from session_index.jsonl)
     var codexNamesMTime: Date? = nil                 // session_index.jsonl mtime when codexNames was built
     let codexDir = (NSHomeDirectory() as NSString).appendingPathComponent(".codex")
-    let codexActiveWindow: TimeInterval = 20         // mtime within this => "working"; heuristic, tune later
+    let codexActiveWindow: TimeInterval = 45         // recent-write window for "working"; the turn-complete marker snaps idle sooner, so this can be generous to bridge write gaps mid-turn
 
     // Dropdown source tabs (0 = Claude, 1 = Codex). Persisted so the menu reopens on the last pick.
     // Both groups' rows are added to the menu; the segmented control toggles their isHidden in place.
@@ -1385,6 +1387,13 @@ final class StatusController: NSObject, NSMenuDelegate {
         NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == claudeDesktopBundleID }
     }
 
+    // The Codex app is the ChatGPT desktop app (bundle com.openai.codex), which runs `codex` as its
+    // engine. Stay alive while it's open, exactly as we do for the Claude desktop app, so the icon
+    // is present the whole time Codex is available (not just mid-turn).
+    func codexAppRunning() -> Bool {
+        NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == codexAppBundleID }
+    }
+
     func sessionCount() -> Int { stateFileNames().count }
 
     // Liveness probe: is this session's `claude` process still alive? kill(pid,0) returns 0 if the
@@ -1399,7 +1408,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     func checkLifecycle() {
         let now = Date()
         if now.timeIntervalSince(launchedAt) < launchGrace { return }
-        if claudeDesktopRunning() || sessionCount() > 0 || !codexSessions.isEmpty {
+        if claudeDesktopRunning() || codexAppRunning() || sessionCount() > 0 || !codexSessions.isEmpty {
             notNeededSince = nil
             return
         }
