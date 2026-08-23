@@ -312,6 +312,16 @@ final class StatusController: NSObject, NSMenuDelegate {
     var pollTimer: Timer?
     var animTimer: Timer?
     var frameIdx = 0
+    // Adaptive poll: fast while a session is actively working, slow when everything is idle, so a
+    // resting menu-bar app isn't scanning disk 2.5x/sec. tick() reschedules pollTimer when activeNow flips.
+    let activePoll: TimeInterval = 0.4
+    let idlePoll: TimeInterval = 2.0
+    var pollInterval: TimeInterval = 0.4
+    var activeNow = false
+    // checkLifecycle enumerates running apps via NSWorkspace — throttle it so the fast active poll
+    // doesn't run that scan on every tick. Idle-quit still fires: idleQuitDelay >= this interval.
+    var lastLifecycleCheck: Date?
+    let lifecycleCheckInterval: TimeInterval = 3
 
     let launchedAt = Date()
     var notNeededSince: Date?
@@ -487,7 +497,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         menu.delegate = self
         statusItem.menu = menu
         render(label: "", color: iconColor(resting: true), animate: false, startedAt: 0)
-        let t = Timer(timeInterval: 0.4, repeats: true) { [weak self] _ in self?.tick() }
+        let t = Timer(timeInterval: pollInterval, repeats: true) { [weak self] _ in self?.tick() }
         RunLoop.main.add(t, forMode: .common)
         pollTimer = t
         tick()
@@ -1209,8 +1219,20 @@ final class StatusController: NSObject, NSMenuDelegate {
         checkLifecycle()
         reloadSessions()
         reloadCodexSessions()
-        evaluate()
+        evaluate()               // sets activeNow from the current lead session
         if menuIsOpen { refreshOpenMenuRows() }
+        let wanted = activeNow ? activePoll : idlePoll
+        if wanted != pollInterval { reschedulePoll(wanted) }
+    }
+
+    // Swap the poll cadence in place (fast<->slow). RunLoop .common mode keeps it firing while the
+    // menu tracks, matching the original timer.
+    func reschedulePoll(_ interval: TimeInterval) {
+        pollInterval = interval
+        pollTimer?.invalidate()
+        let t = Timer(timeInterval: interval, repeats: true) { [weak self] _ in self?.tick() }
+        RunLoop.main.add(t, forMode: .common)
+        pollTimer = t
     }
 
     // The .json session files currently in state.d/ (ignores the .tmp files mid-write).
@@ -1352,6 +1374,9 @@ final class StatusController: NSObject, NSMenuDelegate {
             return pa == pb ? a.ts < b.ts : pa < pb
         }
         statusItem.button?.toolTip = lead.map(sessionMenuLine)  // names repo + surface + state on hover
+        // Drives the adaptive poll cadence: any non-idle lead (working/thinking/permission) keeps the
+        // fast poll; nothing active drops to the slow poll. Read by tick() after evaluate() returns.
+        activeNow = (lead?.eff ?? "idle") != "idle"
 
         guard let lead = lead else { renderResting(); return }
         switch lead.eff {
@@ -1408,6 +1433,11 @@ final class StatusController: NSObject, NSMenuDelegate {
     func checkLifecycle() {
         let now = Date()
         if now.timeIntervalSince(launchedAt) < launchGrace { return }
+        // Throttle the NSWorkspace running-app scan below: at the fast 0.4s poll this would enumerate
+        // every running app 2.5x/sec. Every few seconds is plenty — idleQuitDelay >= this interval, so
+        // the accumulate-then-quit logic is unaffected.
+        if let last = lastLifecycleCheck, now.timeIntervalSince(last) < lifecycleCheckInterval { return }
+        lastLifecycleCheck = now
         if claudeDesktopRunning() || codexAppRunning() || sessionCount() > 0 || !codexSessions.isEmpty {
             notNeededSince = nil
             return

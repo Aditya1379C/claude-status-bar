@@ -94,15 +94,29 @@ extension StatusController {
     // days-old session that is still active right now. The mtime filter in reloadCodexSessions is
     // what limits us to recent ones; discovery just needs to see every file. Cheap: the tree holds a
     // few dozen files and we only stat, never read, here.
+    // Scans only today's and yesterday's date dirs (sessions/YYYY/MM/DD) with a shallow listing,
+    // rather than recursively enumerating the whole sessions tree on every 0.4s poll — that tree
+    // grows unbounded (hundreds of MB of history) and was being walked in full 2.5x/sec even when
+    // Codex wasn't running. Two day dirs cover the retention window (<=15 min by default; see
+    // reloadCodexSessions) plus the midnight boundary; anything older is intentionally out of scope.
     private func codexCandidateRollouts() -> [String] {
         let fm = FileManager.default
         let sessionsRoot = (codexDir as NSString).appendingPathComponent("sessions")
-        guard let en = fm.enumerator(atPath: sessionsRoot) else { return [] }
+        let cal = Calendar.current
+        let now = Date()
+        let days = [now, cal.date(byAdding: .day, value: -1, to: now) ?? now]
         var paths: [String] = []
-        for case let sub as String in en {
-            let name = (sub as NSString).lastPathComponent
-            guard name.hasPrefix("rollout-"), name.hasSuffix(".jsonl") else { continue }
-            paths.append((sessionsRoot as NSString).appendingPathComponent(sub))
+        for day in days {
+            let c = cal.dateComponents([.year, .month, .day], from: day)
+            guard let y = c.year, let mo = c.month, let d = c.day else { continue }
+            let dir = (((sessionsRoot as NSString)
+                .appendingPathComponent(String(format: "%04d", y)) as NSString)
+                .appendingPathComponent(String(format: "%02d", mo)) as NSString)
+                .appendingPathComponent(String(format: "%02d", d))
+            guard let names = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for name in names where name.hasPrefix("rollout-") && name.hasSuffix(".jsonl") {
+                paths.append((dir as NSString).appendingPathComponent(name))
+            }
         }
         return paths
     }
