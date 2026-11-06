@@ -1,4 +1,5 @@
 import Cocoa
+import ServiceManagement
 
 // Custom-drawn toggle. NSSwitch can't show its accent inside a menu (the menu's vibrant, non-key
 // window draws the implicit accent gray), so we render the track + knob as layers and fill the
@@ -1428,24 +1429,14 @@ final class StatusController: NSObject, NSMenuDelegate {
         return kill(pid, 0) == 0 || errno == EPERM
     }
 
-    // Stay while Claude desktop is open OR a session is active; otherwise quit after a
-    // short debounced grace (warmup-session churn must not kill us).
-    func checkLifecycle() {
-        let now = Date()
-        if now.timeIntervalSince(launchedAt) < launchGrace { return }
-        // Throttle the NSWorkspace running-app scan below: at the fast 0.4s poll this would enumerate
-        // every running app 2.5x/sec. Every few seconds is plenty — idleQuitDelay >= this interval, so
-        // the accumulate-then-quit logic is unaffected.
-        if let last = lastLifecycleCheck, now.timeIntervalSince(last) < lifecycleCheckInterval { return }
-        lastLifecycleCheck = now
-        if claudeDesktopRunning() || codexAppRunning() || sessionCount() > 0 || !codexSessions.isEmpty {
-            notNeededSince = nil
-            return
-        }
-        if let since = notNeededSince {
-            if now.timeIntervalSince(since) >= idleQuitDelay { NSApp.terminate(nil) }
-        } else {
-            notNeededSince = now
+    // The app now runs for the whole login session (registered as a login item), so it never
+    // self-quits. Registration is idempotent and re-asserted on every launch.
+    func checkLifecycle() {}
+
+    func registerLoginItem() {
+        if #available(macOS 13.0, *) {
+            let svc = SMAppService.mainApp
+            if svc.status != .enabled { try? svc.register() }
         }
     }
 
@@ -1687,4 +1678,5 @@ final class StatusController: NSObject, NSMenuDelegate {
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 let controller = StatusController()
+controller.registerLoginItem()
 app.run()
