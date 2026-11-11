@@ -14,7 +14,12 @@ const MARKER = sbDir; // every hook command we add points inside this dir
 const updateDest = path.join(sbDir, "update.js");
 const lifecycleDest = path.join(sbDir, "lifecycle.js");
 const settingsPath = path.join(home, ".claude", "settings.json");
-const node = process.execPath;
+// process.execPath is a version-pinned Homebrew path (…/Cellar/node/<ver>/bin/node) that a
+// `brew upgrade node` retires, silently breaking every hook. Prefer a stable symlink that
+// resolves to this same binary; fall back to execPath when none exists.
+const node = ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"].find((p) => {
+  try { return fs.realpathSync(p) === fs.realpathSync(process.execPath); } catch { return false; }
+}) || process.execPath;
 
 // Retire the old 0.0.2 background watcher LaunchAgent on upgrade (0.0.3+ self-quits).
 const OLD_AGENT_LABEL = "com.local.claudestatusbar.watcher";
@@ -92,12 +97,7 @@ if (fs.existsSync(codexDir)) {
     const codexBak = codexHooksPath + ".bak-statusbar";
     if (!fs.existsSync(codexBak)) fs.copyFileSync(codexHooksPath, codexBak);
   }
-  // process.execPath is a version-pinned Homebrew path (…/Cellar/node/<ver>/bin/node) that a
-  // `brew upgrade node` retires, silently breaking the hook. For Codex (which we may relaunch long
-  // after install) prefer a stable symlink that resolves to this same binary.
-  const codexNode = ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"].find((p) => {
-    try { return fs.realpathSync(p) === process.execPath; } catch { return false; }
-  }) || process.execPath;
+  const codexNode = node;
 
   codexHooks.hooks = codexHooks.hooks || {};
   codexHooks.hooks.SessionStart = (codexHooks.hooks.SessionStart || [])
@@ -120,9 +120,7 @@ if (fs.existsSync(codexDir)) {
 if (fs.existsSync(codexDir) || fs.existsSync("/Applications/ChatGPT.app")) {
   const watchDest = path.join(sbDir, "codex-watch.js");
   fs.copyFileSync(path.join(__dirname, "codex-watch.js"), watchDest);
-  const guardNode = ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"].find((p) => {
-    try { return fs.realpathSync(p) === process.execPath; } catch { return false; }
-  }) || process.execPath;
+  const guardNode = node;
   const CODEXWATCH_LABEL = "com.local.claudestatusbar.codexwatch";
   const plistPath = path.join(home, "Library", "LaunchAgents", CODEXWATCH_LABEL + ".plist");
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
