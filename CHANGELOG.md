@@ -3,6 +3,66 @@
 All notable changes to Claude Status Bar are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.5] - 2026-09-18
+
+### Added
+- **Orbit, Claude's new thinking dots animation style.** Three dots that drift together, merge, orbit each other and settle back out.
+- **A toggle to hide the status text.** "Show text" turns the menu bar label off for an icon-only menu bar. On by default. Suggested and first implemented by [@felixradtke](https://github.com/felixradtke) ([#62](https://github.com/m1ckc3s/claude-status-bar/pull/62)).
+
+### Changed
+- **New app icon.** The Orbit dots replace the pixel Clawd.
+- **Updated names for the animation styles.** Claude Spark is now **Spark**, Claude Code is now **Unicode**, and Crab Walking is now **Clawd™**. Your saved choice carries over untouched.
+
+### Removed
+- **The plain `Thinking…` option.** The old "Thinking words" toggle fell back to a plain `Thinking…` when switched off. The status text is now either the rotating words or nothing at all.
+
+## [0.4.4] - 2026-08-05
+
+### Changed
+- **Meaningfully lower CPU usage.** Four fixes, all measured: the menu bar title is no longer rebuilt and re-rendered on every animation frame (it only changes once a second), animation frames are cached instead of being redrawn each step, the "is the Claude desktop app running?" check moved from a query on every poll to a system notification, and each session's transcript is only re-read when it actually changes rather than 2.5 times a second per session.
+
+| | before | after |
+|---|---|---|
+| idle, resting icon | 2.0% | **1.2%** |
+| Claude Spark animating | 5.5% | **3.8%** |
+| Crab Walking animating | 6.6% | **4.7%** |
+| 10 sessions working at once | 9.1% | **4.8%** |
+| 20 sessions working at once | 11.5% | **5.5%** |
+
+  Percentages are share of one CPU core, measured over fixed windows on an M1 Pro. The more sessions you run at once, the bigger the difference: the old code did per-session file reads on every poll, so cost grew with each live session. Found and diagnosed by [@Bardin08](https://github.com/Bardin08) ([#53](https://github.com/m1ckc3s/claude-status-bar/issues/53)).
+
+## [0.4.3] - 2026-07-31
+
+### Added
+- **Completion Sound has an "Every turn" option.** The chime can now play the moment any turn finishes, instead of only after turns of a minute or longer. Still off by default.
+
+### Changed
+- New app icon.
+
+## [0.4.2] - 2026-07-29
+
+### Fixed
+- **Hooks no longer break when Homebrew upgrades Node.** The installer used to write the exact Node binary path into the hook commands, which for Homebrew-installed Node includes the version number, so the next `brew upgrade node` left every hook pointing at a deleted directory: no status, no icon, and no self-heal (that lives in the hooks too). Hook commands now resolve `node` at run time through stable locations instead. If your icon silently died at some point and never came back, this was probably you: install this update and launch the app once. Found, diagnosed, and fixed by [@pedrol2b](https://github.com/pedrol2b) ([#48](https://github.com/m1ckc3s/claude-status-bar/pull/48)), who also contributed the repo's first automated test suite.
+
+
+## [0.4.1] - 2026-07-22
+
+### Fixed
+- **Installing while a Claude Code session is already open no longer looks broken.** The app still quits a few seconds after the first launch (nothing to show yet), but now the hooks relaunch it the moment any session does anything, including sessions that were open before you installed. Previously the icon stayed gone until you started a brand-new session. Thanks to [@Bardin08](https://github.com/Bardin08) for the model bug report and root-cause analysis ([#44](https://github.com/m1ckc3s/claude-status-bar/issues/44)).
+- Quit still means quit: quitting from the menu suppresses the relaunch until your next new Claude Code session (or you open the app yourself).
+
+## [0.4.0] - 2026-07-22
+
+### Added
+- **Homebrew!** Install (or switch over from an existing DMG install) with `brew install --cask claude-status-bar && open -a "Claude Status Bar"`. The launch at the end is required: it installs the Claude Code hooks, and on a switch-over it also removes your old copy. See [HOMEBREW.md](HOMEBREW.md) for the full story.
+- **The update line in the menu is now brew-aware.** Installed via brew: "Update via brew" appears with a copy button (click, paste in your terminal) and only once Homebrew can actually deliver the new version (the cask lags a release by up to a day). Installed via DMG: "Update available" opens the releases page as before, plus a "Switch to Homebrew" copy button.
+- **Completion sound is back**, now as a Completion Sound menu with a length threshold (Off / 1 min+ / 5 min+ / 15 min+) instead of a single on/off toggle. It chimes when a turn that ran at least the chosen length finishes, per session, and is off by default.
+
+### Changed
+- **The app bundle is renamed to "Claude Status Bar.app"** (was `ClaudeStatusBar.app`), matching the app's name and its Homebrew cask token. One-time transition: on first launch the app removes the old-named copy from /Applications (after verifying by bundle identifier that it really is this app), so updating over the rename never leaves two copies. Scripts pointing at the old path need the new, quoted path.
+- The dropdown timer is now the same size as the session name and sits on its baseline, so it reads as part of the row instead of floating slightly high.
+- The working spinner in the dropdown is a touch smaller.
+
 ## [0.3.4] - 2026-07-09
 
 ### Added
@@ -127,6 +187,11 @@ All notable changes to Claude Status Bar are documented here. This project follo
 - Signed and notarized DMG so it opens without a Gatekeeper warning.
 - Claude Code plugin marketplace manifest for the plugin install path.
 
+[0.4.5]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.4.5
+[0.4.4]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.4.4
+[0.4.3]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.4.3
+[0.4.2]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.4.2
+[0.4.0]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.4.0
 [0.3.4]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.3.4
 [0.3.3]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.3.3
 [0.3.2]: https://github.com/m1ckc3s/claude-status-bar/releases/tag/v0.3.2

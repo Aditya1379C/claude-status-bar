@@ -134,7 +134,8 @@ final class SessionRowView: NSView {
         spinner.controlSize = .small
         spinner.isIndeterminate = true
         spinner.isDisplayedWhenStopped = false
-        spinner.frame = iconView.frame
+        let spinSize = iconSize * 0.9
+        spinner.frame = NSRect(x: pad + (iconSize - spinSize) / 2, y: (rowH - spinSize) / 2, width: spinSize, height: spinSize)
         spinner.autoresizingMask = [.maxXMargin]
         spinner.isHidden = true
         addSubview(spinner)
@@ -144,7 +145,7 @@ final class SessionRowView: NSView {
         nameField.frame = NSRect(x: pad + iconSize + 8, y: (rowH - 16) / 2, width: 160, height: 16)
         nameField.autoresizingMask = [.maxXMargin]
         addSubview(nameField)
-        timerField.font = NSFont.monospacedSystemFont(ofSize: NSFont.menuFont(ofSize: 0).pointSize - 2, weight: .regular)
+        timerField.font = NSFont.monospacedSystemFont(ofSize: NSFont.menuFont(ofSize: 0).pointSize, weight: .regular)
         timerField.textColor = .secondaryLabelColor
         timerField.alignment = .right
         timerField.autoresizingMask = [.minXMargin]
@@ -187,15 +188,11 @@ final class SessionRowView: NSView {
             timerField.stringValue = timer
             // Fit the column to the text (mono font, right edge anchored at the pill): a fixed-width
             // column reserved ~50pt of blank space that pixel-truncated the name · branch next to it.
-            let font = timerField.font ?? NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+            let font = timerField.font ?? NSFont.monospacedSystemFont(ofSize: NSFont.menuFont(ofSize: 0).pointSize, weight: .regular)
             let tw = ceil(timer.size(withAttributes: [.font: font]).width) + 2
-            // The timer font is 2pt smaller than the name font; equal-height boxes at the same y center
-            // the text, which leaves the smaller font's baseline higher and the digits visibly floating
-            // next to the name. Offset the frame so the two baselines coincide.
-            let nf = nameField.font ?? NSFont.menuFont(ofSize: 0)
-            let baseline = { (f: NSFont) in (16 - (f.ascender - f.descender)) / 2 - f.descender }
-            let dy = baseline(nf) - baseline(font)
-            timerField.frame = NSRect(x: pillLeft - timerGap - tw, y: (rowH - 16) / 2 + dy, width: tw, height: 16)
+            // Same point size and same box (y/height) as the name field, so the timer sits on the name's
+            // baseline instead of floating at the row's vertical center.
+            timerField.frame = NSRect(x: pillLeft - timerGap - tw, y: (rowH - 16) / 2, width: tw, height: 16)
         } else { timerField.isHidden = true }
         // Name stretches to whatever the timer/pill leave free (branch text made the fixed 160 tight);
         // pixel truncation via the paragraph style handles overflow.
@@ -304,6 +301,75 @@ final class TabBarView: NSView {
     }
 }
 
+// Custom view for the same reason as SessionRowView (a trailing-edge icon needs a flexible
+// spacer; a plain menu item can't cross the shortcut/submenu-arrow gutter), with the same
+// self-drawn hover highlight.
+final class CopyRowView: NSView {
+    private let label = NSTextField(labelWithString: "")
+    private let icon = NSImageView()
+    private let highlightView = NSVisualEffectView()
+    private let command: String
+    private let pad: CGFloat = 14, rowH: CGFloat = 24, iconSize: CGFloat = 15
+    private var copied = false
+
+    init(title: String, command: String, width: CGFloat) {
+        self.command = command
+        super.init(frame: NSRect(x: 0, y: 0, width: width, height: rowH))
+        autoresizingMask = [.width]
+        highlightView.material = .selection
+        highlightView.state = .active
+        highlightView.isEmphasized = true
+        highlightView.wantsLayer = true
+        highlightView.layer?.cornerRadius = 5
+        highlightView.isHidden = true
+        addSubview(highlightView)
+        label.font = .menuFont(ofSize: 0)
+        label.textColor = .labelColor
+        label.stringValue = title
+        label.sizeToFit()
+        label.setFrameOrigin(NSPoint(x: pad, y: (rowH - label.frame.height) / 2))
+        label.autoresizingMask = [.maxXMargin]
+        addSubview(label)
+        icon.image = NSImage(systemSymbolName: "square.on.square", accessibilityDescription: "Copy")
+        icon.contentTintColor = .secondaryLabelColor
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        icon.frame = NSRect(x: width - pad - iconSize, y: (rowH - iconSize) / 2, width: iconSize, height: iconSize)
+        icon.autoresizingMask = [.minXMargin]
+        addSubview(icon)
+        toolTip = command
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    }
+    override func mouseEntered(with event: NSEvent) { setHover(true) }
+    override func mouseExited(with event: NSEvent) { setHover(false) }
+    private func setHover(_ h: Bool) {
+        highlightView.isHidden = !h
+        label.textColor = h ? .white : .labelColor
+        icon.contentTintColor = h ? .white : (copied ? .labelColor : .secondaryLabelColor)
+    }
+    override func layout() {
+        super.layout()
+        highlightView.frame = bounds.insetBy(dx: 5, dy: 0)
+    }
+    override func mouseDown(with event: NSEvent) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(command, forType: .string)
+        copied = true
+        icon.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "Copied")
+        icon.contentTintColor = .white  // click happens mid-hover; setHover keeps it labelColor otherwise
+        // Give the checkmark a beat to register before the menu closes.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.enclosingMenuItem?.menu?.cancelTracking()
+        }
+    }
+}
+
 final class StatusController: NSObject, NSMenuDelegate {
     let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let stateDir = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/state.d")
@@ -323,6 +389,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     // doesn't run that scan on every tick. Idle-quit still fires: idleQuitDelay >= this interval.
     var lastLifecycleCheck: Date?
     let lifecycleCheckInterval: TimeInterval = 3
+    var markOutro = false
 
     let launchedAt = Date()
     var notNeededSince: Date?
@@ -383,6 +450,12 @@ final class StatusController: NSObject, NSMenuDelegate {
     var activeBase = ""        // label without the elapsed clock
     var startedAt: Double = 0  // unix seconds the current turn began (0 = no clock)
     var activeColor: NSColor? = nil
+    var lastTitleText: String? = nil
+    // Tinted frames are deterministic per (style, frame, color); rebuilding one per animation
+    // step re-rasterized identical images at fps. Cleared when the style or color changes.
+    var iconCache: [String: NSImage] = [:]
+    var turnLineCache: [String: (mtime: Date?, line: String?)] = [:]
+    var desktopRunning = false
 
     // Codex integration (see CodexSource.swift): polled from ~/.codex/sessions rollout logs, never
     // pid-reaped (Codex sessions live only in this dict, pruned by staleness each reloadCodexSessions()).
@@ -405,15 +478,21 @@ final class StatusController: NSObject, NSMenuDelegate {
     let spriteFPS: Double = 9 // tune: 8 frames per loop -> ~0.9s/cycle
     let barIconSize: CGFloat = 16 // menu bar glyph size in points; matches Apple's own status icons (was 18)
 
-    enum AnimStyle: String { case web, code, crab }
+    enum AnimStyle: String { case web, code, crab, mark }
     var animStyle: AnimStyle = .web
     var showTimer = false
     enum IconColorMode: Int { case orange = 0, system = 1, dynamic = 2 }
     // orange = always brand; system = always adaptive template; dynamic = adaptive when idle, orange when working
     var iconColorMode: IconColorMode = .orange
-    var playCompletionSound = false // chime when a turn longer than ~5 min finishes
     var useThinkingWords = true     // rotate a playful verb ("Manifesting…") in place of "Thinking…"
+    var showLabel = true            // upstream "Show text": draw the status label next to the icon
+    // App (bundle) icon the user picks: upstream's Orbit-dots or the fork's classic icon. Applied to
+    // NSApp.applicationIconImage at launch + on change (notifications/About; the menu-bar glyph is the
+    // separate Animation Style). Both .icns ship in Resources so either can be chosen without rebuilding.
+    enum AppIcon: String { case orbit, classic }
+    var appIcon: AppIcon = .orbit
     var sessionWord: [String: String] = [:] // id -> current thinking word; re-picked on each entry into "thinking"
+    var soundThreshold: Double = 0  // 0 = off; else the min turn length (seconds) that chimes on completion
     // Claude Code's SPINNER_VERBS, minus the hyphenated/tongue-twister ones. Longest kept is ~14 chars
     // ("Hullaballooing"/"Metamorphosing"); with the timer showing they can get wide in a crowded menu bar.
     let thinkingWords = [
@@ -467,11 +546,52 @@ final class StatusController: NSObject, NSMenuDelegate {
     // Template frames: bright pixels (white eyes) become transparent holes so they're
     // visible as negative space against the menu bar in System color mode.
     lazy var crabTemplateFrames: [NSImage] = crabFrames.map { adaptiveCrabFrame($0) }
+
+    var markFPS: Double = 15
+    var markAdvance: Int { max(1, Int((30.0 / max(1, markFPS)).rounded())) }
+    let markOrbitReps = 2
+    let markBreatheReps = 4
+    let markFadeFrames = 4
+    var markDotScale: CGFloat = 1.08
+    var markSparkScale: CGFloat = 0.92
+    func loadMarkConfig() {
+        let cfg = uiConfig()
+        markFPS = cfg["markFPS"] ?? 15
+        markDotScale = CGFloat(cfg["markDotScale"] ?? 1.08)
+        markSparkScale = CGFloat(cfg["markSparkScale"] ?? 0.92)
+    }
+
+    lazy var markFrames: [String: [NSImage]] = {
+        var out: [String: [NSImage]] = [:]
+        for s in workingMarkStrips {
+            guard let data = Data(base64Encoded: s.data), let img = NSImage(data: data),
+                  let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { continue }
+            out[s.name] = (0..<s.frames).compactMap { i in
+                cg.cropping(to: CGRect(x: 0, y: i * 48, width: 48, height: 48))
+                    .map { NSImage(cgImage: $0, size: NSSize(width: 48, height: 48)) }
+            }
+        }
+        return out
+    }()
+
+    lazy var markSequence: [(strip: String, frame: Int)] = {
+        func n(_ name: String) -> Int { workingMarkStrips.first { $0.name == name }?.frames ?? 0 }
+        var seq: [(strip: String, frame: Int)] = []
+        for i in 0..<n("en110") { seq.append((strip: "en110", frame: i)) }
+        for _ in 0..<markOrbitReps { for i in 0..<n("loop110") { seq.append((strip: "loop110", frame: i)) } }
+        for _ in 0..<markBreatheReps { for i in 0..<n("loop40") { seq.append((strip: "loop40", frame: i)) } }
+        for i in 0..<n("ex40") { seq.append((strip: "ex40", frame: i)) }
+        return seq
+    }()
+    var markLoopStart: Int { workingMarkStrips.first { $0.name == "en110" }?.frames ?? 0 }
+    var markBodyCount: Int { markSequence.count - (workingMarkStrips.first { $0.name == "ex40" }?.frames ?? 0) }
+
     var fps: Double {
         switch animStyle {
         case .web: return spriteFPS
         case .code: return Double(codeGlyphs.count * codeSub) / codeCycle
         case .crab: return crabFPS
+        case .mark: return markFPS
         }
     }
     var frameCount: Int {
@@ -479,8 +599,10 @@ final class StatusController: NSObject, NSMenuDelegate {
         case .web: return max(1, frames.count)
         case .code: return codeGlyphs.count * codeSub
         case .crab: return max(1, crabFrames.count)
+        case .mark: return max(1, markBodyCount)
         }
     }
+    var loopStart: Int { animStyle == .mark ? markLoopStart : 0 }
 
     override init() {
         super.init()
@@ -491,9 +613,16 @@ final class StatusController: NSObject, NSMenuDelegate {
         } else if d.object(forKey: "iconSystem") != nil { // migrate the old two-way setting
             iconColorMode = d.bool(forKey: "iconSystem") ? .system : .orange
         }
-        if d.object(forKey: "completionSound") != nil { playCompletionSound = d.bool(forKey: "completionSound") }
         if d.object(forKey: "thinkingWords") != nil { useThinkingWords = d.bool(forKey: "thinkingWords") }
+        if d.object(forKey: "showLabel") != nil { showLabel = d.bool(forKey: "showLabel") }
+        if let s = d.string(forKey: "appIcon"), let a = AppIcon(rawValue: s) { appIcon = a }
+        if d.object(forKey: "soundThreshold") != nil {
+            soundThreshold = d.double(forKey: "soundThreshold")
+        } else if d.object(forKey: "completionSound") != nil { // migrate the old boolean 5min+ chime
+            soundThreshold = d.bool(forKey: "completionSound") ? 300 : 0
+        }
         if let s = d.string(forKey: "animStyle"), let st = AnimStyle(rawValue: s) { animStyle = st }
+        loadMarkConfig()
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
@@ -502,8 +631,27 @@ final class StatusController: NSObject, NSMenuDelegate {
         RunLoop.main.add(t, forMode: .common)
         pollTimer = t
         tick()
+        observeDesktopApp()
+        try? FileManager.default.removeItem(atPath: (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/quit-intent"))
+        removeOldNamedBundle()
         ensureHooksInstalled()
         checkForUpdate()
+    }
+
+    // 0.4.0 rename transition ("ClaudeStatusBar.app" to "Claude Status Bar.app"): Finder won't
+    // replace across different filenames, so a manual DMG update leaves the old-named copy behind;
+    // remove it on launch. Guarded by bundle id so a fork or unrelated app at that path is never
+    // touched, and skipped when running FROM that path (old-named dev builds).
+    func removeOldNamedBundle() {
+        let old = "/Applications/ClaudeStatusBar.app"
+        guard Bundle.main.bundlePath != old,
+              let info = NSDictionary(contentsOfFile: old + "/Contents/Info.plist"),
+              info["CFBundleIdentifier"] as? String == "com.local.claudestatusbar" else { return }
+        for app in NSWorkspace.shared.runningApplications
+            where app.bundleURL?.path == old && app.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            app.forceTerminate()
+        }
+        try? FileManager.default.removeItem(atPath: old)
     }
 
     // Re-runs on first install AND on every version change, so upgrades pick up hook
@@ -567,6 +715,18 @@ final class StatusController: NSObject, NSMenuDelegate {
     var currentVersion: String { (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0" }
     let releaseAPIURL = "https://api.github.com/repos/m1ckc3s/claude-status-bar/releases/latest"
     let releasePageURL = "https://github.com/m1ckc3s/claude-status-bar/releases/latest"
+    // Homebrew: the cask lags a GitHub release by up to ~a day (autobump), so brew-managed
+    // installs gate "update available" on the CASK version, so the copy command always works
+    // when offered. Public JSON, nothing sent anywhere (same privacy story as the GitHub check).
+    let brewCaskAPIURL = "https://formulae.brew.sh/api/cask/claude-status-bar.json"
+    let brewUpgradeCommand = "brew upgrade --cask claude-status-bar"
+    // The trailing `open` matters: brew only copies the app, and the first launch of the new copy
+    // is what installs hooks and removes the old-named bundle (0.4.0 rename transition).
+    let brewInstallCommand = "brew install --cask claude-status-bar && open -a \"Claude Status Bar\""
+    var brewManaged: Bool {
+        FileManager.default.fileExists(atPath: "/opt/homebrew/Caskroom/claude-status-bar")
+            || FileManager.default.fileExists(atPath: "/usr/local/Caskroom/claude-status-bar")
+    }
 
     // Once/day: cache GitHub's latest release tag in UserDefaults. Nothing sent to us.
     func checkForUpdate() {
@@ -583,6 +743,13 @@ final class StatusController: NSObject, NSMenuDelegate {
             let ver = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
             UserDefaults.standard.set(ver, forKey: "latestVersion")
             UserDefaults.standard.set(now, forKey: "lastUpdateCheck")
+        }.resume()
+        guard let brewURL = URL(string: brewCaskAPIURL) else { return }
+        URLSession.shared.dataTask(with: URLRequest(url: brewURL)) { data, _, _ in
+            guard let data = data,
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let ver = obj["version"] as? String else { return }
+            UserDefaults.standard.set(ver, forKey: "brewCaskVersion")
         }.resume()
     }
 
@@ -683,7 +850,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             var claudeItems: [NSMenuItem] = []
             for s in visible { claudeItems += sessionRowItems(s, menu: menu, activeLead: activeLead, now: now) }
             if visible.isEmpty {
-                if claudeDesktopRunning() {
+                if claudeDesktopRunningLive() {
                     let open = NSMenuItem(title: "Open Claude", action: #selector(openClaude), keyEquivalent: "")
                     open.target = self
                     claudeItems.append(open)
@@ -724,7 +891,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             menu.addItem(header("Sessions"))
             for s in visible { for it in sessionRowItems(s, menu: menu, activeLead: activeLead, now: now) { menu.addItem(it) } }
             menu.addItem(.separator())
-        } else if claudeDesktopRunning() {
+        } else if desktopRunning {
             // No live session to pin, but the desktop app is up — give a way to jump back in.
             menu.addItem(header("Sessions"))
             let open = NSMenuItem(title: "Open Claude", action: #selector(openClaude), keyEquivalent: "")
@@ -744,9 +911,10 @@ final class StatusController: NSObject, NSMenuDelegate {
             UserDefaults.standard.set(on, forKey: "showTimer")
             self?.applyTitle()
         })
-        settingsSub.addItem(toggleRow(title: "Completion sound", qualifier: "5min+", isOn: playCompletionSound) { [weak self] on in
-            self?.playCompletionSound = on
-            UserDefaults.standard.set(on, forKey: "completionSound")
+        settingsSub.addItem(toggleRow(title: "Show text", isOn: showLabel) { [weak self] on in
+            self?.showLabel = on
+            UserDefaults.standard.set(on, forKey: "showLabel")
+            self?.evaluate()
         })
         settingsSub.addItem(toggleRow(title: "Thinking words", isOn: useThinkingWords) { [weak self] on in
             self?.useThinkingWords = on
@@ -760,7 +928,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         // choice carries the checkmark), rather than a flat list under section headers.
         let animParent = NSMenuItem(title: "Animation Style", action: nil, keyEquivalent: "")
         let animSub = NSMenu()
-        for (style, name) in [(AnimStyle.web, "Claude Spark"), (AnimStyle.code, "Claude Code"), (AnimStyle.crab, "Crab Walking")] {
+        for (style, name) in [(AnimStyle.web, "Spark"), (AnimStyle.code, "Unicode"), (AnimStyle.crab, "Clawd™"), (AnimStyle.mark, "Orbit")] {
             let it = NSMenuItem(title: name, action: #selector(chooseStyle(_:)), keyEquivalent: "")
             it.target = self
             it.representedObject = style.rawValue
@@ -781,6 +949,30 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
         colorParent.submenu = colorSub
         settingsSub.addItem(colorParent)
+
+        let iconParent = NSMenuItem(title: "App Icon", action: nil, keyEquivalent: "")
+        let iconSub = NSMenu()
+        for (icon, name) in [(AppIcon.orbit, "Orbit Dots"), (.classic, "Classic")] {
+            let it = NSMenuItem(title: name, action: #selector(chooseAppIcon(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = icon.rawValue
+            it.state = appIcon == icon ? .on : .off
+            iconSub.addItem(it)
+        }
+        iconParent.submenu = iconSub
+        settingsSub.addItem(iconParent)
+
+        let soundParent = NSMenuItem(title: "Completion Sound", action: nil, keyEquivalent: "")
+        let soundSub = NSMenu()
+        for (secs, name) in [(0.0, "Off"), (0.1, "Every turn"), (60.0, "1 min+"), (300.0, "5 min+"), (900.0, "15 min+")] {
+            let it = NSMenuItem(title: name, action: #selector(chooseSound(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = NSNumber(value: secs)
+            it.state = soundThreshold == secs ? .on : .off
+            soundSub.addItem(it)
+        }
+        soundParent.submenu = soundSub
+        settingsSub.addItem(soundParent)
 
         let hideParent = NSMenuItem(title: "Hide Idle Sessions", action: nil, keyEquivalent: "")
         let hideSub = NSMenu()
@@ -989,6 +1181,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     func statusText(_ s: Session, eff: String) -> String {
+        guard showLabel else { return "" }
         switch eff {
         case "permission":       return "Awaiting permission"
         case "thinking", "tool": return workingLabel(s)
@@ -1124,26 +1317,16 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     func workingLabel(_ s: Session) -> String {
-        if useThinkingWords, s.state == "thinking", let w = sessionWord[s.id], !w.isEmpty { return w + "…" }
-        if !s.label.isEmpty { return s.label }
-        return s.state == "tool" ? "Working…" : "Thinking…"
+        if s.state == "thinking" {
+            let w = sessionWord[s.id] ?? thinkingWords.randomElement() ?? ""
+            if !w.isEmpty { return w + "…" }
+        }
+        return s.label.isEmpty ? "Working…" : s.label
     }
 
     // Re-pick a word each time a session ENTERS the thinking state (prompt, or a tool->thinking `post`),
     // avoiding an immediate repeat, so a tool round-trip lands a different word. Held steady while the
-    // session stays thinking. Computed regardless of the toggle so flipping it on shows instantly.
-    // True on the rising edge into "done" for a turn that ran >= 5 min, so the chime only
-    // fires once per long turn. Keeps its own prev-state map so it's independent of prevState.
-    func soundEdgeDone(_ s: Session, now: Double) -> Bool {
-        let prev = soundPrev[s.id] ?? ""
-        if s.state == "thinking" || s.state == "tool", s.startedAt > 0 { turnStart[s.id] = s.startedAt }
-        var edge = false
-        if s.state == "done", prev != "done", let st = turnStart[s.id], st > 0, now - st >= 300 { edge = true }
-        if s.state == "done" { turnStart[s.id] = 0 }
-        soundPrev[s.id] = s.state
-        return edge
-    }
-
+    // session stays thinking.
     func updateThinkingWord(_ s: Session) {
         let prev = prevState[s.id] ?? ""
         guard s.state == "thinking", prev != "thinking" else { return }
@@ -1158,7 +1341,13 @@ final class StatusController: NSObject, NSMenuDelegate {
         return m > 0 ? "\(m)m \(s)s" : "\(s)s"
     }
 
-    @objc func quit() { NSApp.terminate(nil) }
+    // The marker keeps update.js's self-relaunch from undoing an explicit Quit; cleared on the
+    // next SessionStart (lifecycle.js) or the next manual launch (below), whichever comes first.
+    @objc func quit() {
+        let marker = (NSHomeDirectory() as NSString).appendingPathComponent(".claude/statusbar/quit-intent")
+        FileManager.default.createFile(atPath: marker, contents: nil)
+        NSApp.terminate(nil)
+    }
 
     @objc func openClaude() {
         let ws = NSWorkspace.shared
@@ -1167,11 +1356,9 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
     }
 
-    // Row click. Desktop session: focus the Claude app. Do NOT use claude://resume?session=<id>,
-    // that calls importCliSession() and spawns a duplicate "ungrouped" session record
-    // (local_<random>.json with cliSessionId=<id>) every click, it's an import verb, not focus.
-    // The clean focus path (claude://code/<bridgeSessionId>) needs an opaque session_/cse_ bridge
-    // id the app never exposes to us (not in env, not derivable from the UUID, undefined on disk).
+    // Row click. Desktop session: raise the Claude app. Focusing the exact conversation isn't
+    // possible; every deep-link route either imports a copy or needs an id the app never exposes
+    // (re-verified 2026-08-08, Claude 1.26832.0 — see the ROADMAP desktop section, issue #58).
     // CLI session: bring its terminal APP to the front (zero permission). Targeting the exact
     // window/tab needs a one-time Automation grant, deferred to the opt-in build (issue #19).
     func openSession(_ id: String, entrypoint: String, termProgram: String) {
@@ -1197,6 +1384,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         guard let raw = sender.representedObject as? Int, let m = IconColorMode(rawValue: raw) else { return }
         iconColorMode = m
         UserDefaults.standard.set(raw, forKey: "iconColorMode")
+        iconCache.removeAll()
         evaluate() // re-render the current state in the new color
     }
 
@@ -1205,11 +1393,38 @@ final class StatusController: NSObject, NSMenuDelegate {
         UserDefaults.standard.set(secs, forKey: "hideIdleAfter")
     }
 
+    func appIconImage(_ icon: AppIcon) -> NSImage? {
+        let name = icon == .classic ? "AppIconClassic" : "AppIconOrbit"
+        guard let p = Bundle.main.path(forResource: name, ofType: "icns") else { return nil }
+        return NSImage(byReferencingFile: p)
+    }
+    // The bundle's static AppIcon.icns is the Orbit default; this overrides the live icon (used by
+    // notifications + the About panel) so a pick takes effect without a rebuild.
+    func applyAppIcon() {
+        if let img = appIconImage(appIcon) { NSApp.applicationIconImage = img }
+    }
+
+    @objc func chooseAppIcon(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let a = AppIcon(rawValue: raw) else { return }
+        appIcon = a
+        UserDefaults.standard.set(raw, forKey: "appIcon")
+        applyAppIcon()
+    }
+
+    @objc func chooseSound(_ sender: NSMenuItem) {
+        guard let n = sender.representedObject as? NSNumber else { return }
+        soundThreshold = n.doubleValue
+        UserDefaults.standard.set(soundThreshold, forKey: "soundThreshold")
+    }
+
     @objc func chooseStyle(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let st = AnimStyle(rawValue: raw) else { return }
         animStyle = st
         UserDefaults.standard.set(raw, forKey: "animStyle")
+        iconCache.removeAll()
+        loadMarkConfig()
         animTimer?.invalidate(); animTimer = nil // recreate at the new style's fps
+        markOutro = false
         frameIdx = 0
         evaluate()
     }
@@ -1320,9 +1535,20 @@ final class StatusController: NSObject, NSMenuDelegate {
         return ""
     }
 
+    // Working->done edge for the completion chime, gated on turn length >= soundThreshold (0 = off).
+    // Reads prevState, which the evaluate() loop writes only AFTER this runs, so it must be called
+    // there before that write. Tracks the turn's start while the session is working.
+    func completionEdge(_ s: Session, now: Double) -> Bool {
+        if s.state == "thinking" || s.state == "tool", s.startedAt > 0 { turnStart[s.id] = s.startedAt }
+        let prev = prevState[s.id] ?? ""
+        var edge = false
+        if soundThreshold > 0, s.state == "done", prev != "done", let st = turnStart[s.id], st > 0, now - st >= soundThreshold { edge = true }
+        if s.state == "done" { turnStart[s.id] = 0 }
+        return edge
+    }
+
     func evaluate() {
         let now = Date().timeIntervalSince1970
-
         var chime = false
         for id in Array(sessions.keys) {
             guard var s = sessions[id] else { continue }
@@ -1335,17 +1561,16 @@ final class StatusController: NSObject, NSMenuDelegate {
                                  : (s.eff == "idle" && stalePruneAge > 0 && now - s.ts > stalePruneAge)
             if dead {
                 try? FileManager.default.removeItem(atPath: (stateDir as NSString).appendingPathComponent(id + ".json"))
-                sessions[id] = nil; fileMTimes[id + ".json"] = nil; prevState[id] = nil; sessionWord[id] = nil
+                sessions[id] = nil; fileMTimes[id + ".json"] = nil; prevState[id] = nil; sessionWord[id] = nil; turnStart[id] = nil
                 continue
             }
             sessions[id] = s
-            updateThinkingWord(s)   // must run before soundEdgeDone, which overwrites soundPrev[id]
-            if soundEdgeDone(s, now: now) { chime = true }
+            updateThinkingWord(s)
+            if completionEdge(s, now: now) { chime = true }
             prevState[s.id] = s.state
         }
-        if chime, playCompletionSound { completionSound?.play() }
-        for id in Array(prevState.keys) where sessions[id] == nil { prevState[id] = nil; sessionWord[id] = nil }
-        for id in Array(soundPrev.keys) where sessions[id] == nil { soundPrev[id] = nil; turnStart[id] = nil }
+        for id in Array(prevState.keys) where sessions[id] == nil { prevState[id] = nil; sessionWord[id] = nil; turnStart[id] = nil }
+        if chime { completionSound?.play() }
 
         // Same-named projects (two clones/worktrees of one repo) get a parent-folder qualifier
         // ("work/myrepo" vs "tmp/myrepo") so their rows stay tellable apart. Runs after the reap so
@@ -1395,11 +1620,22 @@ final class StatusController: NSObject, NSMenuDelegate {
     // Per-session effective state with two recovery nets: an absolute age cap, plus the transcript
     // "interrupted by user" marker (Esc / denied permission fire no hook, freezing the file). "done"
     // collapses to rest.
+    // effectiveState runs every tick for every working session; re-tailing the transcript each
+    // time was 8KB of file I/O per session at 2.5 Hz. Transcripts only grow when text streams
+    // (~20s apart), so gate the read on mtime.
+    func cachedLastTurnLine(_ path: String) -> String? {
+        let m = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        if let hit = turnLineCache[path], hit.mtime == m { return hit.line }
+        let line = lastTurnLine(ofFileAt: path)
+        turnLineCache[path] = (m, line)
+        return line
+    }
+
     func effectiveState(_ s: Session, now: Double) -> String {
         if s.state == "thinking" || s.state == "tool" || s.state == "permission" {
             let cap: Double = s.state == "permission" ? 7200 : 900
             if now - s.ts > cap { return "idle" }
-            if !s.transcript.isEmpty, let last = lastTurnLine(ofFileAt: s.transcript),
+            if !s.transcript.isEmpty, let last = cachedLastTurnLine(s.transcript),
                last.contains("interrupted by user") { return "idle" }
             return s.state
         }
@@ -1409,8 +1645,25 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     // MARK: self-quit lifecycle
 
-    func claudeDesktopRunning() -> Bool {
-        NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == claudeDesktopBundleID }
+    // Asking LaunchServices on every tick meant a synchronous XPC round-trip at 2.5 Hz. Workspace
+    // notifications keep a flag instead; the authoritative query runs only at the quit decision,
+    // so a missed notification can delay a quit by one debounce but can never quit under a live app.
+    func claudeDesktopRunningLive() -> Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: claudeDesktopBundleID).isEmpty
+    }
+
+    func observeDesktopApp() {
+        desktopRunning = claudeDesktopRunningLive()
+        let nc = NSWorkspace.shared.notificationCenter
+        for (name, running) in [(NSWorkspace.didLaunchApplicationNotification, true),
+                                (NSWorkspace.didTerminateApplicationNotification, false)] {
+            nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                guard let self,
+                      let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                      app.bundleIdentifier == self.claudeDesktopBundleID else { return }
+                self.desktopRunning = running
+            }
+        }
     }
 
     // The Codex app is the ChatGPT desktop app (bundle com.openai.codex), which runs `codex` as its
@@ -1508,22 +1761,46 @@ final class StatusController: NSObject, NSMenuDelegate {
         self.startedAt = startedAt
 
         if animate {
+            markOutro = false
             if animTimer == nil {
                 let t = Timer(timeInterval: 1.0 / fps, repeats: true) { [weak self] _ in self?.animStep() }
                 RunLoop.main.add(t, forMode: .common)
                 animTimer = t
             }
+        } else if dot {
+            markOutro = false
+            animTimer?.invalidate(); animTimer = nil
+            frameIdx = 0
+            button.image = dotIcon(color: color)
+        } else if markOutro {
+            ()
+        } else if animStyle == .mark, animTimer != nil, frameIdx >= markLoopStart {
+            markOutro = true
+            frameIdx = markBodyCount
         } else {
             animTimer?.invalidate(); animTimer = nil
             frameIdx = 0
-            button.image = dot ? dotIcon(color: color) : restingIcon(color: color)
+            button.image = restingIcon(color: color)
         }
         applyTitle()
         if button.image == nil { button.image = dot ? dotIcon(color: color) : restingIcon(color: color) }
     }
 
     func animStep() {
-        frameIdx = (frameIdx + 1) % frameCount
+        frameIdx += (animStyle == .mark ? markAdvance : 1)
+        if markOutro {
+            if frameIdx >= markSequence.count - 1 {
+                markOutro = false
+                animTimer?.invalidate(); animTimer = nil
+                frameIdx = 0
+                statusItem.button?.image = restingIcon(color: activeColor)
+                applyTitle()
+                return
+            }
+        } else if frameIdx >= frameCount {
+            let body = max(1, frameCount - loopStart)
+            frameIdx = loopStart + (frameIdx - loopStart) % body
+        }
         statusItem.button?.image = iconImage(color: activeColor, frame: frameIdx)
         applyTitle() // refresh the elapsed clock
     }
@@ -1532,8 +1809,15 @@ final class StatusController: NSObject, NSMenuDelegate {
         guard let button = statusItem.button else { return }
         var text = activeBase
         if showTimer, startedAt > 0 {
-            text += "  " + elapsed(max(0, Int(Date().timeIntervalSince1970 - startedAt)))
+            let clock = elapsed(max(0, Int(Date().timeIntervalSince1970 - startedAt)))
+            text = text.isEmpty ? clock : text + "  " + clock
         }
+        // Assigning attributedTitle re-shapes the string through CoreText and re-snapshots the
+        // status item bitmap, so at animation fps an unchanged title costs a full redraw per frame
+        // (the clock only ticks at 1 Hz). labelColor is dynamic and resolves at draw, so skipping
+        // the assignment still tracks light/dark menu bars.
+        guard text != lastTitleText else { return }
+        lastTitleText = text
         if text.isEmpty {
             button.imagePosition = .imageOnly
             button.attributedTitle = NSAttributedString(string: "")
@@ -1557,8 +1841,36 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     func iconImage(color: NSColor?, frame: Int) -> NSImage {
+        let key = "\(animStyle.rawValue)|\(frame)|\(color == nil)"
+        if let cached = iconCache[key] { return cached }
+        let img = flattened(buildIconImage(color: color, frame: frame))
+        iconCache[key] = img
+        return img
+    }
+
+    func flattened(_ img: NSImage) -> NSImage {
+        let s = img.size
+        guard s.width > 0, s.height > 0,
+              let rep = NSBitmapImageRep(bitmapDataPlanes: nil,
+                                         pixelsWide: Int(s.width * 2), pixelsHigh: Int(s.height * 2),
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                         isPlanar: false, colorSpaceName: .deviceRGB,
+                                         bytesPerRow: 0, bitsPerPixel: 0) else { return img }
+        rep.size = s
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        img.draw(in: NSRect(origin: .zero, size: s), from: .zero, operation: .sourceOver, fraction: 1.0)
+        NSGraphicsContext.restoreGraphicsState()
+        let out = NSImage(size: s)
+        out.addRepresentation(rep)
+        out.isTemplate = img.isTemplate
+        return out
+    }
+
+    func buildIconImage(color: NSColor?, frame: Int) -> NSImage {
         if animStyle == .web { return tint(frames, color: color, frame: frame) }
         if animStyle == .crab { return crabIcon(color: color, frame: frame) }
+        if animStyle == .mark { return markIcon(color: color, frame: frame) }
         let i = (frame / codeSub) % codeGlyphs.count
         let local = (CGFloat(frame % codeSub) + 0.5) / CGFloat(codeSub) // 0…1 within this glyph
         // Scale envelope per glyph: rise, hold at peak, fall, so each lands before the swap.
@@ -1623,7 +1935,56 @@ final class StatusController: NSObject, NSMenuDelegate {
     let logoSet: [NSImage] = Data(base64Encoded: claudeLogoPNG).flatMap(NSImage.init(data:)).map { [$0] } ?? []
     func restingIcon(color: NSColor?) -> NSImage {
         if animStyle == .crab { return crabIcon(color: color, frame: 0) }
+        if animStyle == .mark, let logo = logoSet.first {
+            return markLayer(logo, color: color, scale: markSparkScale)
+        }
         return tint(logoSet.isEmpty ? frames : logoSet, color: color, frame: 0)
+    }
+
+    func markLayer(_ mask: NSImage, color: NSColor?, scale: CGFloat) -> NSImage {
+        let s: CGFloat = 18, d = s * scale
+        let r = NSRect(x: (s - d) / 2, y: (s - d) / 2, width: d, height: d)
+        let scaled = NSImage(size: NSSize(width: s, height: s), flipped: false) { _ in
+            mask.draw(in: r, from: .zero, operation: .sourceOver, fraction: 1.0)
+            return true
+        }
+        let img = NSImage(size: NSSize(width: s, height: s), flipped: false) { rect in
+            if let c = color {
+                c.setFill()
+                rect.fill()
+                scaled.draw(in: rect, from: .zero, operation: .destinationIn, fraction: 1.0)
+            } else {
+                scaled.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0)
+            }
+            return true
+        }
+        img.isTemplate = (color == nil)
+        return img
+    }
+
+    func markIcon(color: NSColor?, frame: Int) -> NSImage {
+        guard frame >= 0, frame < markSequence.count else { return restingIcon(color: color) }
+        let step = markSequence[frame]
+        guard let strip = markFrames[step.strip], step.frame < strip.count else {
+            return NSImage(size: NSSize(width: 18, height: 18))
+        }
+        var sparkAlpha: CGFloat = 0
+        if step.strip == "en110", step.frame < markFadeFrames {
+            sparkAlpha = 1 - (CGFloat(step.frame) + 1) / CGFloat(markFadeFrames)
+        } else if step.strip == "ex40" {
+            let tail = strip.count - step.frame - 1
+            if tail < markFadeFrames { sparkAlpha = 1 - CGFloat(tail) / CGFloat(markFadeFrames) }
+        }
+        let dots = markLayer(strip[step.frame], color: color, scale: markDotScale)
+        guard sparkAlpha > 0, let logo = logoSet.first else { return dots }
+        let spark = markLayer(logo, color: color, scale: markSparkScale)
+        let img = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            dots.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: 1 - sparkAlpha)
+            spark.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: sparkAlpha)
+            return true
+        }
+        img.isTemplate = (color == nil)
+        return img
     }
 
     // nil color (System) => adaptive shaded template (see adaptiveCrabFrame in CrabRender.swift);
@@ -1679,4 +2040,5 @@ let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 let controller = StatusController()
 controller.registerLoginItem()
+controller.applyAppIcon()
 app.run()

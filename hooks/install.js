@@ -35,8 +35,14 @@ fs.rmSync(path.join(sbDir, "sessions.d"), { recursive: true, force: true });
 fs.copyFileSync(path.join(__dirname, "update.js"), updateDest);
 fs.copyFileSync(path.join(__dirname, "lifecycle.js"), lifecycleDest);
 
-const cmd = (evt) => `${node} ${updateDest} ${evt}`;
-const life = (evt) => `${node} ${lifecycleDest} ${evt}`;
+const shellQuote = (value) => `'${value.replace(/'/g, `'\\''`)}'`;
+const quotedMarkerPrefix = shellQuote(MARKER).slice(0, -1);
+const isOurs = (command) =>
+  command.includes(MARKER) || command.includes(quotedMarkerPrefix);
+const cmd = (evt) =>
+  `PATH="/opt/homebrew/bin:/usr/local/bin\${PATH:+:$PATH}" node ${shellQuote(updateDest)} ${evt}`;
+const life = (evt) =>
+  `PATH="/opt/homebrew/bin:/usr/local/bin\${PATH:+:$PATH}" node ${shellQuote(lifecycleDest)} ${evt}`;
 
 let settings = {};
 if (fs.existsSync(settingsPath)) {
@@ -50,7 +56,7 @@ const stripOurs = (arr) =>
   (arr || [])
     .map((entry) => ({
       ...entry,
-      hooks: (entry.hooks || []).filter((h) => !(h.command || "").includes(MARKER)),
+      hooks: (entry.hooks || []).filter((h) => !isOurs(h.command || "")),
     }))
     .filter((entry) => (entry.hooks || []).length > 0);
 
