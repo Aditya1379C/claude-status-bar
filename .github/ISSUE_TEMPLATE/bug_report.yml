@@ -1,0 +1,118 @@
+name: 🐛 Bug Report
+description: Report a bug or unexpected behavior in Claude Status Bar
+title: "[BUG] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to report a bug. Please fill out the sections below to help us understand and fix the issue.
+
+        **Before submitting, please check:**
+        - You're using the [latest version](https://github.com/m1ckc3s/claude-status-bar/releases/latest)
+        - This issue hasn't already been reported by searching [existing issues](https://github.com/m1ckc3s/claude-status-bar/issues)
+        - This is a bug, not a feature request or support question
+
+        Are you having trouble with brew? See the [Homebrew guide](https://github.com/m1ckc3s/claude-status-bar/blob/main/HOMEBREW.md).
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight Checklist
+      description: Please confirm before submitting
+      options:
+        - label: I have searched [existing issues](https://github.com/m1ckc3s/claude-status-bar/issues) and the [known issues](https://github.com/m1ckc3s/claude-status-bar/blob/main/TROUBLESHOOTING.md#known-issues) and this hasn't been reported yet
+          required: true
+        - label: I have checked the [Troubleshooting guide](https://github.com/m1ckc3s/claude-status-bar/blob/main/TROUBLESHOOTING.md) and my issue isn't covered there
+          required: true
+        - label: This is a single bug report (please file separate reports for different bugs)
+          required: true
+        - label: I have Node.js installed (`node -v` prints a version)
+          required: true
+
+  - type: textarea
+    id: whats-wrong
+    attributes:
+      label: What's Wrong?
+      description: Describe what's happening that shouldn't be
+      placeholder: The app quits unexpectedly a few seconds after it opens.
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-should-happen
+    attributes:
+      label: What Should Happen?
+      description: Describe the expected behavior
+      placeholder: The icon should stay in the menu bar and show the current session status.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      placeholder: |
+        1. Open the Claude desktop app (or start a new session in the terminal)
+        2. Start a Claude session and write a prompt
+        3. The menu bar icon shows
+        4. The icon disappears while the terminal is still active
+    validations:
+      required: true
+
+  - type: input
+    id: app-version
+    attributes:
+      label: App version
+      description: Shown at the bottom of the menu bar dropdown (e.g. Version 0.4.0)
+      placeholder: e.g. 0.4.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: How did you install it?
+      options:
+        - Homebrew (brew install)
+        - DMG (downloaded from Releases)
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      description: What version of macOS are you on?
+      placeholder: e.g. 15.5 (Sequoia)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where are you encountering this bug?
+      options:
+        - Claude Code app
+        - In the terminal (CLI)
+    validations:
+      required: true
+
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal / shell
+      description: If you're in the terminal, which one are you using?
+      placeholder: e.g. Terminal.app, iTerm2, Ghostty, Warp
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Anything else worth adding? Optional.
+      placeholder: Any other context, or let me know if you're happy to open a PR.
+    validations:
+      required: false

@@ -8,9 +8,9 @@ It's also inspired a bunch of forks and ports, Codex versions, Linux, Windows, o
 
 ## What's welcome
 
-Bug fixes, performance wins, animation and visual polish, better session focus, and compatibility fixes (macOS versions, CPU architectures, terminals).
+Bug fixes, performance wins, animation and visual polish, better session focus, and compatibility fixes (macOS versions, CPU architectures, terminals). New crab animations and icon styles are especially welcome.
 
-Also the [known issues and suggestions](https://github.com/m1ckc3s/claude-status-bar/issues/22): it tracks proposed enhancements, and anything marked in scope there is open to pick up.
+Also the [known issues](https://github.com/m1ckc3s/claude-status-bar/blob/main/TROUBLESHOOTING.md#known-issues) in TROUBLESHOOTING.md: some behavior that looks like a bug is understood and intentional.
 
 ## Won't be merged
 
@@ -50,7 +50,7 @@ And tell me which terminal you used (Terminal.app, Ghostty, iTerm2, WezTerm, and
 
 ## What to expect
 
-This is a solo hobby project. Replies can be slow, and I may decline a perfectly good PR because it adds complexity or scope I don't want to carry. That's not a knock on your work. When in doubt keep the change small, and check the [known issues](https://github.com/m1ckc3s/claude-status-bar/issues/22) first: some behavior that looks like a bug is intentional and already understood, timing, lifecycle, and self-quit especially.
+This is a solo hobby project. Replies can be slow, and I may decline a perfectly good PR because it adds complexity or scope I don't want to carry. That's not a knock on your work. When in doubt keep the change small, and check the [known issues](https://github.com/m1ckc3s/claude-status-bar/blob/main/TROUBLESHOOTING.md#known-issues) first: some behavior that looks like a bug is intentional and already understood, timing, lifecycle, and self-quit especially.
 
 ## Commits
 
